@@ -18,7 +18,6 @@ YOLO11m_benchmark/
 *.pth
 *.h5
 *.npy
-*.pdf
 # Excluding runs directory (YOLO/Tensorboard)
 runs/
 ensemble_results/

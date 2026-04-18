@@ -56,19 +56,32 @@ def cached_embed(query):
 # --- DYNAMIC PROJECT DISCOVERY ---
 @functools.lru_cache(maxsize=1)
 def get_all_projects_map():
-    """Create a map of keywords to actual project filenames."""
+    """Create a map of keywords to actual project filenames.
+    Returns: (keyword_mapping, all_project_names, global_project_names)
+    """
     projs = [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
     mapping = {}
+    global_projs = []
+    
+    # Core textile project keywords
+    core_textile_keywords = ["baluchari", "muslin", "negamam", "phulkari"]
+    
     for p in projs:
         # Extract keywords from filename (e.g., 'Baluchari', 'Muslin')
-        # We take the first part before the first underscore or space
+        name_lower = p.lower()
         keyword = p.split("_")[0].split(" ")[0].lower()
         mapping[keyword] = p
-    return mapping, projs
+        
+        # If it doesn't match a core project, it's considered 'Global' (Dept Info)
+        is_core = any(ck in name_lower for ck in core_textile_keywords)
+        if not is_core:
+            global_projs.append(p)
+            
+    return mapping, projs, global_projs
 
 def get_projects_from_text(text):
     """Fallback: detect projects by simple keyword matching in text."""
-    mapping, all_projs = get_all_projects_map()
+    mapping, all_projs, _ = get_all_projects_map()
     detected = []
     text_lower = text.lower()
     for kw, full_name in mapping.items():
@@ -81,27 +94,31 @@ def get_projects_from_text(text):
 # HIGH-PRECISION RETRIEVAL — Semantic Search + Local Reranking
 # ============================================================
 def retrieve_text(query, query_vec, detected_projects=None, top_k=3):
-    """Retrieve text chunks, then re-rank with Cross-Encoder."""
-    # 1. Native Pinecone Filter (Strict discovery)
-    # Ensure we use keyword fallback if LLM missed it
+    """Retrieve text chunks. Hybrid: uses specific filters + global fallback."""
+    _, _, global_projs = get_all_projects_map()
+    
+    # 1. Hybrid Filter: Combine specific detected projects with Global/Dept info
     extra_detected = get_projects_from_text(query)
-    final_filters = list(set((detected_projects or []) + extra_detected))
+    final_filters = list(set((detected_projects or []) + extra_detected + global_projs))
     
     filter_dict = None
     if final_filters:
         filter_dict = {"project": {"$in": final_filters}}
-        print(f"RAG: Final text filter applied -> {final_filters}")
+        print(f"RAG: Hybrid text filter active -> {final_filters}")
 
-    # Fetch 15 candidates to rerank
+    # Fetch 30 candidates (doubled) to give the Reranker better variety
     results = text_idx.query(
         vector=query_vec, 
-        top_k=15, 
+        top_k=30, 
         include_metadata=True,
         filter=filter_dict
     )
     
     if not results["matches"]:
-        return "No relevant context found.", []
+        # Fallback: if filtered search produced nothing, try a global search
+        results = text_idx.query(vector=query_vec, top_k=30, include_metadata=True)
+        if not results["matches"]:
+            return "No relevant context found.", []
 
     # 2. Local Cross-Encoder Reranking (HD Quality)
     candidates = []
@@ -134,25 +151,25 @@ def retrieve_text(query, query_vec, detected_projects=None, top_k=3):
     return "\n\n".join(contexts), sources
 
 def retrieve_images(query, query_vec, top_k=6, project_filters=None, is_comparison=False):
-    """Retrieve images. Only performs a balanced split if it's a clear comparison."""
-    # Safety: Ensure keyword-based projects are included (LLM fallback)
+    """Retrieve images. Hybrid: always includes Global/Dept context."""
+    _, _, global_projs = get_all_projects_map()
+    
+    # Safety: Ensure keyword-based projects and Global projects are included
     extra_detected = get_projects_from_text(query)
-    final_filters = list(set((project_filters or []) + extra_detected))
+    final_filters = list(set((project_filters or []) + extra_detected + global_projs))
 
-    # 1. No filter or single project -> Standard search across the group
-    if not final_filters or (len(final_filters) == 1 and not is_comparison):
-        filter_dict = None
-        if final_filters:
-            filter_dict = {"project": {"$in": final_filters}}
-            print(f"RAG: Image filter applied -> {final_filters}")
+    # 1. Standard search (now with global context included in filters)
+    if not is_comparison:
+        filter_dict = {"project": {"$in": final_filters}} if final_filters else None
+        print(f"RAG: Hybrid image filter active -> {final_filters}")
             
         results = image_idx.query(vector=query_vec, top_k=top_k, include_metadata=True, filter=filter_dict)
         return _parse_image_results(results)
 
-    # 2. Comparison detected -> Fetch separately to ensure balance
+    # 2. Comparison detected -> Fetch separately + add Global context too
     num_projects = len(final_filters)
-    per_project_k = max(2, top_k // num_projects)
-    print(f"RAG: Comparison query confirmed ({num_projects} projects). Balanced image fetch active.")
+    per_project_k = max(2, top_k // num_projects) if num_projects > 0 else 2
+    print(f"RAG: Comparison query confirmed with global context included.")
 
     all_matches = []
     for project in final_filters:
@@ -170,13 +187,22 @@ def retrieve_images(query, query_vec, top_k=6, project_filters=None, is_comparis
 def _parse_image_results(results):
     """Helper to parse Pinecone matches into our app format."""
     images = []
+    seen_descriptions = set()
     for match in results.get("matches", []):
         md = match["metadata"]
+        desc = md.get("description", "").strip()
+        
+        # Deduplicate: if we already have an image with this exact description, skip it
+        # This prevents the UI from being flooded with identical captions.
+        if desc in seen_descriptions:
+            continue
+            
+        seen_descriptions.add(desc)
         images.append({
             "url": md.get("image_url"),
             "project": md.get("project"),
             "page": md.get("page"),
-            "description": md.get("description", ""),
+            "description": desc,
             "score": round(match["score"], 3)
         })
     return images
@@ -189,7 +215,7 @@ def is_query_relevant(query):
     q = query.lower()
     # Dynamic guardrails: includes words from all project names
     dynamic_keywords = []
-    _, all_projs = get_all_projects_map()
+    _, all_projs, _ = get_all_projects_map()
     for proj in all_projs:
         dynamic_keywords.extend(proj.lower().split("_"))
     
@@ -200,6 +226,8 @@ def is_query_relevant(query):
         "data", "report", "professor", "dr", "prof", "dst", "shri",
         "साड़ी", "बुनाई", "कपास", "रेशम", "डिज़ाइन", "परियोजना",
         "बालूचरी", "मसलिन", "नेगमम", "फुलकारी",
+        "baluchari", "muslin", "negamam", "phulkari", "maheshwari",
+        "history", "origin", "cluster", "weaver"
     ]
     
     for kw in set(dynamic_keywords + extra_keywords):
@@ -221,8 +249,11 @@ def generate_answer(query, context, images_context, language="English"):
         for i, img in enumerate(images_context)
     ])
 
+    _, all_projs, _ = get_all_projects_map()
+    project_list = ", ".join(all_projs)
+
     system_msg = f"""You are a helpful assistant for the Textile Department. 
-    You ONLY answer questions about these 4 textile projects: Baluchari, Muslin, Negamam, and Phulkari.
+    You ONLY answer questions about these projects: {project_list}.
     
     STRICT RULES:
     1. Answer ONLY using the context provided below.
@@ -259,7 +290,7 @@ def get_standalone_query_and_projects(query, history):
     """Ask LLM to rewrite query AND identify projects involved."""
     history_str = "\n".join([f"{m['role']}: {m['content'][:300]}" for m in history[-4:]])
     
-    _, all_projs = get_all_projects_map()
+    _, all_projs, _ = get_all_projects_map()
     
     # We ask for a JSON response to keep it clean
     prompt = f"""You are an expert textile researcher. Analyze the follow-up question in context of history.
@@ -275,8 +306,7 @@ def get_standalone_query_and_projects(query, history):
     TASK:
     1. Rephrase as a standalone search query (Concepts ONLY, remove professor names/dates).
     2. Identify ONLY the project names from the list above that are DIRECTLY RELEVANT.
-       - IMPORTANT: If the question is about 'Muslin', you MUST return 'Muslin_Dr. Shantanu Basak...'.
-       - IMPORTANT: If the question is about 'Baluchari', you MUST return 'Baluchari Saree_Prof. Wazed Ali...'.
+       - IMPORTANT: You MUST return exact string matches to the items in "Available Project Files" (e.g. including the professor and date suffixes if they exist in the list). Do not truncate the names.
     3. Determine if this is a comparison query between multiple projects.
     
     Response format:
@@ -323,18 +353,19 @@ def get_standalone_query_and_projects(query, history):
 def process_query(query, language="English"):
     t_total = time.time()
     
-    # 0. Quick Guardrail
-    if not is_query_relevant(query):
-        return {
-            "answer": "I'm sorry, but I can only assist with questions related to the Textile Department projects (Baluchari, Muslin, Negamam, etc.). How can I help you with those?",
-            "images": [],
-            "sources": []
-        }
-
     # 1. LLM-Powered Rewriting and Project Detection
     t0 = time.time()
     standalone_query, detected_projects, is_comp = get_standalone_query_and_projects(query, chat_history)
     print(f"  >> Step 1 (LLM rewrite):  {time.time()-t0:.2f}s")
+
+    # 0. Quick Guardrail (Now checking the rewritten standalone query!)
+    if not is_query_relevant(standalone_query):
+        print("  >> Guardrail blocked:", standalone_query)
+        return {
+            "answer": "I'm sorry, but I can only assist with questions related to the Textile Department projects (Baluchari, Muslin, Negamam, etc.).",
+            "images": [],
+            "sources": []
+        }
     
     # 2. Embed the query exactly ONCE with cache
     t0 = time.time()
