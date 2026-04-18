@@ -1,0 +1,65 @@
+# --- PROJECT SPECIFIC ---
+phulkari
+maheshwari
+negammam_saree
+others
+random_16_02/
+selected_negammam
+data/
+data_patched/
+wrong_predictions/
+sareeclassifier_appfile/
+stitch_designs/
+tflite_models/
+YOLO11m_benchmark/
+
+# --- LARGE ARTIFACTS (Models/Data) ---
+*.pt
+*.pth
+*.h5
+*.npy
+*.pdf
+# Excluding runs directory (YOLO/Tensorboard)
+runs/
+ensemble_results/
+
+# --- SENSITIVE DATA ---
+.env
+*.key
+*.pem
+credentials.json
+
+# --- PYTHON ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+
+# --- OS FILES ---
+.DS_Store
+Thumbs.db
+
+# --- FLUTTER / DART (Generic) ---
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/

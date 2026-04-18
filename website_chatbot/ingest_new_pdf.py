@@ -1,0 +1,167 @@
+import fitz  # PyMuPDF
+import os
+import io
+import time
+from PIL import Image
+from dotenv import load_dotenv
+from pinecone import Pinecone
+from sentence_transformers import SentenceTransformer
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from groq import Groq
+import torch
+
+# 1. Setup Environment
+BASE_DIR = os.path.dirname(__file__)
+env_path = os.path.join(BASE_DIR, ".env")
+if not os.path.exists(env_path):
+    env_path = os.path.join(BASE_DIR, "..", "ask_textile", ".env")
+load_dotenv(env_path)
+
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+if not PINECONE_API_KEY or not GROQ_API_KEY:
+    print("Error: Missing API Keys in .env")
+    exit(1)
+
+pc = Pinecone(api_key=PINECONE_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Indexes
+TEXT_INDEX_NAME = "website-text-v2"
+IMAGE_INDEX_NAME = "website-images-text"
+
+text_idx = pc.Index(TEXT_INDEX_NAME)
+image_idx = pc.Index(IMAGE_INDEX_NAME)
+
+# 2. Setup Embedding Model
+print("Loading BAAI/bge-base-en-v1.5...")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = SentenceTransformer('BAAI/bge-base-en-v1.5', device=device)
+
+def get_bge_embedding(text):
+    instruction = "represent the document for retrieval: "
+    return model.encode(instruction + text).tolist()
+
+# 3. Target PDF
+PDF_FILENAME = "Data for website.pdf"
+PDF_PATH = os.path.join(BASE_DIR, PDF_FILENAME)
+PROJECT_NAME = PDF_FILENAME.replace(".pdf", "")
+# Assigning index 5 to avoid collision with existing 0-4
+PDF_ID_IDX = 5
+
+if not os.path.exists(PDF_PATH):
+    print(f"Error: {PDF_FILENAME} not found in {BASE_DIR}")
+    exit(1)
+
+# 4. Processing
+print(f"=== Processing: {PROJECT_NAME} ===")
+doc = fitz.open(PDF_PATH)
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+
+STATIC_IMAGES_DIR = os.path.join(BASE_DIR, "static", "images")
+os.makedirs(STATIC_IMAGES_DIR, exist_ok=True)
+
+all_text_chunks = []
+all_image_data = []
+
+def generate_llama_caption(page_text, page_num, img_idx):
+    """Use Llama 3.3 70B to generate a high-quality caption."""
+    page_text = page_text[:2000] # Limit context
+    prompt = f"""You are looking at page {page_num} of a document about the project: "{PROJECT_NAME}".
+This page contains an image. Based on the page text provided, write a SHORT, specific caption (1-2 sentences) describing what this image most likely shows.
+
+Rules:
+- Be specific to the textile project (mention saree type, patterns, or techniques).
+- If the text mentions figures or diagrams, use that info.
+- Keep it under 30 words.
+
+Page text:
+{page_text}
+
+Caption:"""
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=60,
+        )
+        return response.choices[0].message.content.strip().strip('"')
+    except Exception as e:
+        print(f"  Error generating caption: {e}")
+        return f"Image from {PROJECT_NAME} project, page {page_num}"
+
+# Iterate through pages
+for page_num in range(len(doc)):
+    page = doc[page_num]
+    page_text = page.get_text()
+    
+    # Text Processing
+    if page_text.strip():
+        chunks = text_splitter.split_text(page_text)
+        for i, chunk in enumerate(chunks):
+            all_text_chunks.append({
+                "id": f"doc_{PDF_ID_IDX}_pg_{page_num}_ch_{i}_v2",
+                "text": chunk,
+                "metadata": {
+                    "project": PROJECT_NAME,
+                    "page": page_num + 1,
+                    "text": chunk
+                }
+            })
+    
+    # Image Processing
+    images = page.get_images(full=True)
+    for img_idx, img in enumerate(images):
+        xref = img[0]
+        base_image = doc.extract_image(xref)
+        image_bytes = base_image["image"]
+        ext = base_image["ext"]
+        
+        # Save image locally
+        img_filename = f"{PROJECT_NAME}_pg{page_num+1}_img{img_idx}.{ext}".replace(" ", "_")
+        img_path = os.path.join(STATIC_IMAGES_DIR, img_filename)
+        with open(img_path, "wb") as f:
+            f.write(image_bytes)
+            
+        # Generate high-quality caption with Llama 70B
+        print(f"  Generating caption for Page {page_num+1}, Image {img_idx}...")
+        caption = generate_llama_caption(page_text, page_num + 1, img_idx)
+        print(f"    -> {caption}")
+        
+        all_image_data.append({
+            "id": f"img_{PDF_ID_IDX}_{page_num}_{img_idx}",
+            "caption": caption,
+            "metadata": {
+                "project": PROJECT_NAME,
+                "page": page_num + 1,
+                "image_url": f"/static/images/{img_filename}",
+                "description": caption
+            }
+        })
+        time.sleep(0.5) # Rate limiting for Groq
+
+# 5. Final Ingestion
+print(f"\n--- Uploading {len(all_text_chunks)} text chunks to {TEXT_INDEX_NAME} ---")
+for i in range(0, len(all_text_chunks), 20):
+    batch = all_text_chunks[i:i+20]
+    to_upsert = []
+    for item in batch:
+        vec = get_bge_embedding(item["text"])
+        to_upsert.append((item["id"], vec, item["metadata"]))
+    text_idx.upsert(vectors=to_upsert)
+    print(f"  Uploaded text batch {i}-{i+len(batch)}")
+
+print(f"\n--- Uploading {len(all_image_data)} images to {IMAGE_INDEX_NAME} ---")
+for i in range(0, len(all_image_data), 20):
+    batch = all_image_data[i:i+20]
+    to_upsert = []
+    for item in batch:
+        # Embed the CAPTION, not the image! (This matches the website-images-text system)
+        vec = get_bge_embedding(item["caption"])
+        to_upsert.append((item["id"], vec, item["metadata"]))
+    image_idx.upsert(vectors=to_upsert)
+    print(f"  Uploaded image batch {i}-{i+len(batch)}")
+
+print(f"\nSUCCESS: Ingested {PROJECT_NAME} into Pinecone with Llama-70B captions.")

@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//////////////////////////////////////////////////////
+// ENUMS
+//////////////////////////////////////////////////////
+
+enum UserRole {
+  user
+  admin
+  readonly
+}
+
+enum ConversationRole {
+  user
+  assistant
+  system
+}
+
+enum Visibility {
+  private
+  shared
+  public
+}
+
+enum DocumentStatus {
+  pending
+  processing
+  indexed
+  error
+}
+
+enum ChunkTier {
+  sentence
+  paragraph
+  section
+  document
+}
+
+//////////////////////////////////////////////////////
+// USERS & AUTH
+//////////////////////////////////////////////////////
+
+model User {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String    @unique @db.VarChar(255)
+  passwordHash  String    @map("password_hash") @db.VarChar(255)
+  displayName   String?   @map("display_name") @db.VarChar(100)
+  role          UserRole  @default(user)
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  lastLoginAt   DateTime? @map("last_login_at") @db.Timestamptz
+
+  sessions      Session[]
+  conversations Conversation[]
+  collections   DocumentCollection[]
+
+  @@index([email], name: "idx_users_email")
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  tokenHash    String   @map("token_hash") @db.VarChar(255)
+  refreshToken String?  @map("refresh_token") @db.VarChar(255)
+  expiresAt    DateTime @map("expires_at") @db.Timestamptz
+  ipAddress    String?  @map("ip_address") @db.Inet
+  userAgent    String?  @map("user_agent")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], name: "idx_sessions_user_id")
+  @@index([tokenHash], name: "idx_sessions_token_hash")
+  @@map("sessions")
+}
+
+//////////////////////////////////////////////////////
+// CONVERSATIONS & MESSAGES
+//////////////////////////////////////////////////////
+
+model Conversation {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  title         String   @default("New Conversation") @db.VarChar(500)
+  collectionId  String?  @map("collection_id") @db.Uuid
+  modelId       String   @default("llama-3.1-8b") @map("model_id") @db.VarChar(100)
+  isArchived    Boolean  @default(false) @map("is_archived")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collection   DocumentCollection? @relation(fields: [collectionId], references: [id])
+  messages     Message[]
+
+  @@index([userId], name: "idx_conv_user_id")
+  @@index([updatedAt], name: "idx_conv_updated_at")
+  @@map("conversations")
+}
+
+model Message {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId   String   @map("conversation_id") @db.Uuid
+  role             ConversationRole
+  content          String
+  tokenCount       Int?     @map("token_count")
+  retrievedChunks  Json?    @map("retrieved_chunks")
+  latencyMs        Int?     @map("latency_ms")
+  modelId          String?  @map("model_id") @db.VarChar(100)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId], name: "idx_messages_conv_id")
+  @@index([createdAt], name: "idx_messages_created_at")
+  @@map("messages")
+}
+
+//////////////////////////////////////////////////////
+// DOCUMENT COLLECTIONS
+//////////////////////////////////////////////////////
+
+model DocumentCollection {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String    @db.VarChar(255)
+  description     String?
+  ownerId         String?   @map("owner_id") @db.Uuid
+  visibility      Visibility @default(private)
+  embeddingModel  String    @default("nomic-embed-text-v1.5") @map("embedding_model") @db.VarChar(100)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  owner          User?         @relation(fields: [ownerId], references: [id])
+  documents      Document[]
+  conversations  Conversation[]
+
+  @@map("document_collections")
+}
+
+//////////////////////////////////////////////////////
+// DOCUMENTS
+//////////////////////////////////////////////////////
+
+model Document {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collectionId    String?        @map("collection_id") @db.Uuid
+  filename        String         @db.VarChar(500)
+  filePath        String         @map("file_path")
+  fileSizeBytes   BigInt?        @map("file_size_bytes")
+  mimeType        String?        @map("mime_type") @db.VarChar(100)
+  status          DocumentStatus @default(pending)
+  chunkCount      Int            @default(0) @map("chunk_count")
+  errorMessage    String?        @map("error_message")
+  ingestedAt      DateTime?      @map("ingested_at") @db.Timestamptz
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  collection DocumentCollection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  chunks     DocumentChunk[]
+
+  @@index([collectionId], name: "idx_documents_collection_id")
+  @@index([status], name: "idx_documents_status")
+  @@map("documents")
+}
+
+//////////////////////////////////////////////////////
+// DOCUMENT CHUNKS
+//////////////////////////////////////////////////////
+
+model DocumentChunk {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId     String     @map("document_id") @db.Uuid
+  vectorId       String?    @map("vector_id") @db.VarChar(255)
+  tier           ChunkTier
+  content        String
+  tokenCount     Int?       @map("token_count")
+  chunkIndex     Int?       @map("chunk_index")
+  pageNumber     Int?       @map("page_number")
+  sectionHeader  String?    @map("section_header")
+  parentChunkId  String?    @map("parent_chunk_id") @db.Uuid
+  metadata       Json?
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  document     Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  parentChunk  DocumentChunk? @relation("ChunkHierarchy", fields: [parentChunkId], references: [id])
+  childChunks  DocumentChunk[] @relation("ChunkHierarchy")
+
+  @@index([documentId], name: "idx_chunks_document_id")
+  @@index([vectorId], name: "idx_chunks_vector_id")
+  @@map("document_chunks")
+}

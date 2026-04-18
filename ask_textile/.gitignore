@@ -1,0 +1,12 @@
+ragas.txt
+chroma_qwen_db
+.vscode
+downloads
+.env
+__pycache__/
+node_modules
+RAG/textile_chunks.json
+RAG/textile_html_lectures.json
+RAG/textile_transcripts.json
+RAG/failed_transcripts.json
+data/youtube_cookies.txt

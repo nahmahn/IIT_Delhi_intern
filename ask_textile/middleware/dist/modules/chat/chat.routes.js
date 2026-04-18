@@ -1,0 +1,13 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const chat_controller_1 = require("./chat.controller");
+const asyncHandler_1 = require("../../utils/asyncHandler");
+const auth_middleware_1 = require("../../middlewares/auth.middleware");
+const router = (0, express_1.Router)();
+router.use(auth_middleware_1.authMiddleware);
+router.get("/", (0, asyncHandler_1.asyncHandler)(chat_controller_1.ChatController.listConversations));
+router.get("/:conversationId/messages", (0, asyncHandler_1.asyncHandler)(chat_controller_1.ChatController.getMessages));
+router.post("/", (0, asyncHandler_1.asyncHandler)(chat_controller_1.ChatController.chat));
+router.get("/stream", (0, asyncHandler_1.asyncHandler)(chat_controller_1.ChatController.streamChat));
+exports.default = router;

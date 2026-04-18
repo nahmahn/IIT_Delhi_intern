@@ -1,0 +1,150 @@
+<svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" font-family="Georgia, serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1117;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1f2e;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="boxGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e293b" />
+      <stop offset="100%" style="stop-color:#0f172a" />
+    </linearGradient>
+    <linearGradient id="boxGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e3a2f" />
+      <stop offset="100%" style="stop-color:#0f2318" />
+    </linearGradient>
+    <linearGradient id="boxGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2d1e3a" />
+      <stop offset="100%" style="stop-color:#1a0f23" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#38bdf8"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#4ade80"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#c084fc"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="420" fill="url(#bgGrad)" rx="12"/>
+
+  <!-- Title -->
+  <text x="450" y="36" text-anchor="middle" fill="#f8fafc" font-size="17" font-weight="bold" letter-spacing="1">Textile RAG System — Architecture</text>
+  <line x1="200" y1="46" x2="700" y2="46" stroke="#334155" stroke-width="1"/>
+
+  <!-- ── USER block ── -->
+  <rect x="28" y="170" width="100" height="60" rx="8" fill="url(#boxGrad1)" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="78" y="196" text-anchor="middle" fill="#38bdf8" font-size="11" font-weight="bold">USER</text>
+  <text x="78" y="212" text-anchor="middle" fill="#94a3b8" font-size="9">HTTP Client</text>
+  <text x="78" y="224" text-anchor="middle" fill="#94a3b8" font-size="9">/ Frontend</text>
+
+  <!-- ── AWS BACKEND block ── -->
+  <rect x="175" y="155" width="130" height="90" rx="8" fill="url(#boxGrad1)" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="240" y="178" text-anchor="middle" fill="#38bdf8" font-size="11" font-weight="bold">AWS BACKEND</text>
+  <line x1="190" y1="184" x2="290" y2="184" stroke="#1e3a5f" stroke-width="1"/>
+  <text x="240" y="198" text-anchor="middle" fill="#94a3b8" font-size="9">POST /rag</text>
+  <text x="240" y="212" text-anchor="middle" fill="#94a3b8" font-size="9">{"question": "..."}</text>
+  <text x="240" y="226" text-anchor="middle" fill="#64748b" font-size="8">EC2 · ap-southeast-2</text>
+
+  <!-- ── SSH TUNNEL block ── -->
+  <rect x="355" y="155" width="130" height="90" rx="8" fill="url(#boxGrad3)" stroke="#c084fc" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="420" y="178" text-anchor="middle" fill="#c084fc" font-size="11" font-weight="bold">SSH TUNNEL</text>
+  <line x1="370" y1="184" x2="470" y2="184" stroke="#3b1f5e" stroke-width="1"/>
+  <text x="420" y="198" text-anchor="middle" fill="#94a3b8" font-size="9">Reverse Port Fwd</text>
+  <text x="420" y="212" text-anchor="middle" fill="#94a3b8" font-size="9">-R 8000:localhost</text>
+  <text x="420" y="226" text-anchor="middle" fill="#64748b" font-size="8">autossh · systemd</text>
+
+  <!-- ── FASTAPI block ── -->
+  <rect x="535" y="140" width="130" height="120" rx="8" fill="url(#boxGrad2)" stroke="#4ade80" stroke-width="1.5"/>
+  <text x="600" y="163" text-anchor="middle" fill="#4ade80" font-size="11" font-weight="bold">FASTAPI SERVER</text>
+  <line x1="550" y1="169" x2="650" y2="169" stroke="#1a3a2a" stroke-width="1"/>
+  <text x="600" y="183" text-anchor="middle" fill="#94a3b8" font-size="9">GET  /health</text>
+  <text x="600" y="197" text-anchor="middle" fill="#94a3b8" font-size="9">POST /rag</text>
+  <text x="600" y="214" text-anchor="middle" fill="#64748b" font-size="8">uvicorn · port 8000</text>
+  <text x="600" y="228" text-anchor="middle" fill="#64748b" font-size="8">systemd service</text>
+  <text x="600" y="242" text-anchor="middle" fill="#64748b" font-size="8">Lab Machine</text>
+
+  <!-- ── RAG PIPELINE box ── -->
+  <rect x="20" y="310" width="860" height="88" rx="8" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+  <text x="450" y="330" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="bold" letter-spacing="1">RAG PIPELINE  (LangChain · Lab Machine)</text>
+  <line x1="40" y1="336" x2="860" y2="336" stroke="#1e293b" stroke-width="1"/>
+
+  <!-- RAG step boxes -->
+  <!-- Embed -->
+  <rect x="40" y="346" width="140" height="42" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1"/>
+  <text x="110" y="363" text-anchor="middle" fill="#38bdf8" font-size="9" font-weight="bold">1. EMBED QUERY</text>
+  <text x="110" y="378" text-anchor="middle" fill="#64748b" font-size="8">OllamaEmbeddings</text>
+  <text x="110" y="389" text-anchor="middle" fill="#64748b" font-size="8">nomic-embed-text</text>
+
+  <!-- Arrow -->
+  <line x1="183" y1="367" x2="205" y2="367" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+
+  <!-- Vector Search -->
+  <rect x="208" y="346" width="140" height="42" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1"/>
+  <text x="278" y="363" text-anchor="middle" fill="#38bdf8" font-size="9" font-weight="bold">2. VECTOR SEARCH</text>
+  <text x="278" y="378" text-anchor="middle" fill="#64748b" font-size="8">ChromaDB</text>
+  <text x="278" y="389" text-anchor="middle" fill="#64748b" font-size="8">chroma_qwen_db · k=2</text>
+
+  <!-- Arrow -->
+  <line x1="351" y1="367" x2="373" y2="367" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+
+  <!-- Prompt -->
+  <rect x="376" y="346" width="140" height="42" rx="6" fill="#1e293b" stroke="#c084fc" stroke-width="1"/>
+  <text x="446" y="363" text-anchor="middle" fill="#c084fc" font-size="9" font-weight="bold">3. BUILD PROMPT</text>
+  <text x="446" y="378" text-anchor="middle" fill="#64748b" font-size="8">PromptTemplate</text>
+  <text x="446" y="389" text-anchor="middle" fill="#64748b" font-size="8">context + question</text>
+
+  <!-- Arrow -->
+  <line x1="519" y1="367" x2="541" y2="367" stroke="#c084fc" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+
+  <!-- LLM -->
+  <rect x="544" y="346" width="140" height="42" rx="6" fill="#1e293b" stroke="#4ade80" stroke-width="1"/>
+  <text x="614" y="363" text-anchor="middle" fill="#4ade80" font-size="9" font-weight="bold">4. LLM GENERATE</text>
+  <text x="614" y="378" text-anchor="middle" fill="#64748b" font-size="8">ChatOllama</text>
+  <text x="614" y="389" text-anchor="middle" fill="#64748b" font-size="8">qwen2.5:7b · temp=0.3</text>
+
+  <!-- Arrow -->
+  <line x1="687" y1="367" x2="709" y2="367" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- Output -->
+  <rect x="712" y="346" width="140" height="42" rx="6" fill="#1e293b" stroke="#4ade80" stroke-width="1"/>
+  <text x="782" y="363" text-anchor="middle" fill="#4ade80" font-size="9" font-weight="bold">5. PARSE OUTPUT</text>
+  <text x="782" y="378" text-anchor="middle" fill="#64748b" font-size="8">StrOutputParser</text>
+  <text x="782" y="389" text-anchor="middle" fill="#64748b" font-size="8">{"answer": "..."}</text>
+
+  <!-- ── Arrows between main blocks ── -->
+  <!-- User → AWS -->
+  <line x1="129" y1="200" x2="172" y2="200" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="150" y="194" text-anchor="middle" fill="#64748b" font-size="8">query</text>
+
+  <!-- AWS → Tunnel -->
+  <line x1="306" y1="200" x2="352" y2="200" stroke="#c084fc" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+  <text x="329" y="194" text-anchor="middle" fill="#64748b" font-size="8">tunnel</text>
+
+  <!-- Tunnel → FastAPI -->
+  <line x1="486" y1="200" x2="532" y2="200" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="509" y="194" text-anchor="middle" fill="#64748b" font-size="8">fwd</text>
+
+  <!-- FastAPI → RAG Pipeline (down arrow) -->
+  <line x1="600" y1="261" x2="600" y2="295" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <line x1="600" y1="295" x2="110" y2="295" stroke="#4ade80" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="110" y1="295" x2="110" y2="344" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="355" y="290" text-anchor="middle" fill="#64748b" font-size="8">invokes RAG chain</text>
+
+  <!-- Response back arrow (top) -->
+  <path d="M 240 154 Q 240 80 78 80 Q 78 80 78 168" stroke="#38bdf8" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arrowBlue)"/>
+  <text x="160" y="72" text-anchor="middle" fill="#64748b" font-size="8">{"answer": "..."} response</text>
+
+  <!-- Institute firewall label -->
+  <rect x="490" y="62" width="140" height="22" rx="4" fill="#1e1a0f" stroke="#854d0e" stroke-width="1"/>
+  <text x="560" y="77" text-anchor="middle" fill="#ca8a04" font-size="9">🔒 Institute Firewall / NAT</text>
+
+  <!-- Firewall arrow pointing between tunnel and AWS -->
+  <line x1="560" y1="85" x2="430" y2="153" stroke="#854d0e" stroke-width="1" stroke-dasharray="3,3"/>
+</svg>
