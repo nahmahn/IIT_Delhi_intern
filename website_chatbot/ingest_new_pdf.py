@@ -44,11 +44,11 @@ def get_bge_embedding(text):
     return model.encode(instruction + text).tolist()
 
 # 3. Target PDF
-PDF_FILENAME = "Data for website.pdf"
+PDF_FILENAME = "Carbon footprint of Heritage products.pdf"
 PDF_PATH = os.path.join(BASE_DIR, PDF_FILENAME)
 PROJECT_NAME = PDF_FILENAME.replace(".pdf", "")
-# Assigning index 5 to avoid collision with existing 0-4
-PDF_ID_IDX = 5
+# Assigning index 6 to avoid collision with existing 0-5
+PDF_ID_IDX = 6
 
 if not os.path.exists(PDF_PATH):
     print(f"Error: {PDF_FILENAME} not found in {BASE_DIR}")
@@ -66,15 +66,21 @@ all_text_chunks = []
 all_image_data = []
 
 def generate_llama_caption(page_text, page_num, img_idx):
-    """Use Llama 3.3 70B to generate a high-quality caption."""
-    page_text = page_text[:2000] # Limit context
-    prompt = f"""You are looking at page {page_num} of a document about the project: "{PROJECT_NAME}".
-This page contains an image. Based on the page text provided, write a SHORT, specific caption (1-2 sentences) describing what this image most likely shows.
+    """Use Llama 3.3 70B to generate a high-quality, data-aware caption."""
+    page_text = page_text[:2500]  # Slightly more context for better chart detection
+    prompt = f"""You are an expert technical researcher analyzing a document about: "{PROJECT_NAME}".
+You are looking at Page {page_num}, which contains an image (Image #{img_idx+1}).
 
-Rules:
-- Be specific to the textile project (mention saree type, patterns, or techniques).
-- If the text mentions figures or diagrams, use that info.
-- Keep it under 30 words.
+TASK:
+Determine if this image is a DATA CHART (Pie chart, Bar graph, Table) or a TEXTILE PHOTOGRAPH.
+Write a SPECIFIC, technically accurate caption based on the surrounding text.
+
+STRICT RULES:
+1. If it's a chart/graph, start with "Pie chart showing..." or "Graph displaying...".
+2. Explicitly mention what the data represents (e.g., "Carbon footprint breakdown," "Emission hotspots").
+3. Include the specific saree or material name mentioned in the data labels or nearby headers.
+4. If it's a photograph, describe the visual scene (e.g., "Artisan weaving Baluchari motif").
+5. Keep it under 25 words. DO NOT use generic phrases like "as seen in the report".
 
 Page text:
 {page_text}
@@ -84,13 +90,13 @@ Caption:"""
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
+            temperature=0.1,  # Lower temperature for more factual captions
             max_tokens=60,
         )
         return response.choices[0].message.content.strip().strip('"')
     except Exception as e:
         print(f"  Error generating caption: {e}")
-        return f"Image from {PROJECT_NAME} project, page {page_num}"
+        return f"Figure from {PROJECT_NAME}, page {page_num}"
 
 # Iterate through pages
 for page_num in range(len(doc)):

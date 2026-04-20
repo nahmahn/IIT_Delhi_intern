@@ -20,13 +20,13 @@ PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
-# website-text-v2: High-resolution BGE embeddings
-text_idx = pc.Index("website-text-v2")
-# website-images-text: Reuse existing image-text index
-image_idx = pc.Index("website-images-text")
+# website-text-v3: Professional metadata-driven index
+text_idx = pc.Index("website-text-v3")
+# website-images-v3: Professional metadata-driven image index
+image_idx = pc.Index("website-images-v3")
 
-# Load models
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# Load models - Forcing CPU to avoid local DLL crashes/driver issues
+device = "cuda"
 print(f"RAG: Loading Local Embeddings ({device})...")
 text_model = SentenceTransformer('BAAI/bge-base-en-v1.5', device=device)
 
@@ -53,35 +53,30 @@ def cached_embed(query):
         del _embedding_cache[oldest]
     return vec
 
+# --- METADATA CLASSIFICATION RULES (Aligned with Ingest) ---
+DOC_TYPE_RULES = {
+    "project_report": ["baluchari", "muslin", "negamam", "phulkari", "maheshwari"],
+    "dept_info": ["shri", "centre", "department"],
+}
+
 # --- DYNAMIC PROJECT DISCOVERY ---
 @functools.lru_cache(maxsize=1)
 def get_all_projects_map():
-    """Create a map of keywords to actual project filenames.
-    Returns: (keyword_mapping, all_project_names, global_project_names)
-    """
+    """Create a map of keywords to actual project filenames for query rewriting."""
     projs = [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
     mapping = {}
-    global_projs = []
-    
-    # Core textile project keywords
-    core_textile_keywords = ["baluchari", "muslin", "negamam", "phulkari"]
     
     for p in projs:
-        # Extract keywords from filename (e.g., 'Baluchari', 'Muslin')
         name_lower = p.lower()
+        # Map first word/keyword to full local name
         keyword = p.split("_")[0].split(" ")[0].lower()
         mapping[keyword] = p
-        
-        # If it doesn't match a core project, it's considered 'Global' (Dept Info)
-        is_core = any(ck in name_lower for ck in core_textile_keywords)
-        if not is_core:
-            global_projs.append(p)
             
-    return mapping, projs, global_projs
+    return mapping, projs 
 
 def get_projects_from_text(text):
-    """Fallback: detect projects by simple keyword matching in text."""
-    mapping, all_projs, _ = get_all_projects_map()
+    """Fallback: detect project names by simple keyword matching."""
+    mapping, _ = get_all_projects_map()
     detected = []
     text_lower = text.lower()
     for kw, full_name in mapping.items():
@@ -94,25 +89,33 @@ def get_projects_from_text(text):
 # HIGH-PRECISION RETRIEVAL — Semantic Search + Local Reranking
 # ============================================================
 def retrieve_text(query, query_vec, detected_projects=None, top_k=3):
-    """Retrieve text chunks. Hybrid: uses specific filters + global fallback."""
-    _, _, global_projs = get_all_projects_map()
-    
-    # 1. Hybrid Filter: Combine specific detected projects with Global/Dept info
+    """Retrieve text chunks using doc_type metadata filtering."""
     extra_detected = get_projects_from_text(query)
-    final_filters = list(set((detected_projects or []) + extra_detected + global_projs))
+    final_projects = list(set((detected_projects or []) + extra_detected))
     
-    filter_dict = None
-    if final_filters:
-        filter_dict = {"project": {"$in": final_filters}}
-        print(f"RAG: Hybrid text filter active -> {final_filters}")
+    # Text Retrieval Filter Strategy:
+    # 1. Detected Projects -> Focus on those + Dept Info + Supplementary
+    # 2. No Projects -> Global search (No filter)
+    if final_projects:
+        filter_dict = {
+            "$or": [
+                {"project": {"$in": final_projects}},
+                {"doc_type": {"$in": ["dept_info", "supplementary"]}}
+            ]
+        }
+        print(f"RAG: Text filter active (Project + Dept + Supp) -> {final_projects}")
+    else:
+        filter_dict = None
+        print("RAG: Global text search active (No filters).")
 
-    # Fetch 30 candidates (doubled) to give the Reranker better variety
+    # Fetch candidates for reranking
     results = text_idx.query(
         vector=query_vec, 
         top_k=30, 
         include_metadata=True,
         filter=filter_dict
     )
+
     
     if not results["matches"]:
         # Fallback: if filtered search produced nothing, try a global search
@@ -151,61 +154,107 @@ def retrieve_text(query, query_vec, detected_projects=None, top_k=3):
     return "\n\n".join(contexts), sources
 
 def retrieve_images(query, query_vec, top_k=6, project_filters=None, is_comparison=False):
-    """Retrieve images. Hybrid: always includes Global/Dept context."""
-    _, _, global_projs = get_all_projects_map()
-    
-    # Safety: Ensure keyword-based projects and Global projects are included
+    """Retrieve images using metadata-driven doc_type filtering."""
     extra_detected = get_projects_from_text(query)
-    final_filters = list(set((project_filters or []) + extra_detected + global_projs))
+    final_projects = list(set((project_filters or []) + extra_detected))
 
-    # 1. Standard search (now with global context included in filters)
+    SCORE_THRESHOLD = 0.55  # hard filter for low relevance
+
+    # Image Retrieval Filter Strategy (Mentor-aligned):
+    # 1. Projects Detected -> Only fetch those specific projects + dept_info
+    # 2. No Projects -> Fetch project_reports + dept_info (Exclude supplementary/charts)
+    if final_projects:
+        filter_dict = {
+            "$or": [
+                {"project": {"$in": final_projects}},
+                {"doc_type": {"$eq": "dept_info"}}
+            ]
+        }
+        print(f"RAG: Image filter active (Project + Dept) -> {final_projects}")
+    else:
+        filter_dict = {
+            "doc_type": {"$in": ["project_report", "dept_info"]}
+        }
+        print("RAG: Global image filter active (Project Reports + Dept Info).")
+
     if not is_comparison:
-        filter_dict = {"project": {"$in": final_filters}} if final_filters else None
-        print(f"RAG: Hybrid image filter active -> {final_filters}")
-            
-        results = image_idx.query(vector=query_vec, top_k=top_k, include_metadata=True, filter=filter_dict)
-        return _parse_image_results(results)
-
-    # 2. Comparison detected -> Fetch separately + add Global context too
-    num_projects = len(final_filters)
-    per_project_k = max(2, top_k // num_projects) if num_projects > 0 else 2
-    print(f"RAG: Comparison query confirmed with global context included.")
-
-    all_matches = []
-    for project in final_filters:
-        res = image_idx.query(
+        results = image_idx.query(
             vector=query_vec, 
-            top_k=per_project_k, 
-            include_metadata=True,
-            filter={"project": {"$eq": project}}
+            top_k=30,  # Fetch more for reranking
+            include_metadata=True, 
+            filter=filter_dict
         )
-        all_matches.extend(res["matches"])
-    
-    all_matches.sort(key=lambda x: x["score"], reverse=True)
-    return _parse_image_results({"matches": all_matches})
-
-def _parse_image_results(results):
-    """Helper to parse Pinecone matches into our app format."""
-    images = []
-    seen_descriptions = set()
-    for match in results.get("matches", []):
-        md = match["metadata"]
-        desc = md.get("description", "").strip()
+    else:
+        # Comparison mode: fetch separately from each project to ensure balance
+        per_project_k = max(4, (top_k * 2) // max(len(final_projects), 1))
+        all_matches = []
+        for project in final_projects:
+            res = image_idx.query(
+                vector=query_vec, 
+                top_k=per_project_k, 
+                include_metadata=True,
+                filter={"project": {"$eq": project}}
+            )
+            all_matches.extend(res["matches"])
         
-        # Deduplicate: if we already have an image with this exact description, skip it
-        # This prevents the UI from being flooded with identical captions.
-        if desc in seen_descriptions:
+        results = {"matches": sorted(all_matches, key=lambda x: x["score"], reverse=True)}
+
+    # 1. Hard Filter and Candidate Harvesting
+    candidates = []
+    for match in results.get("matches", []):
+        if match["score"] < SCORE_THRESHOLD:
             continue
             
-        seen_descriptions.add(desc)
-        images.append({
-            "url": md.get("image_url"),
+        md = match["metadata"]
+        candidates.append({
+            "description": md.get("description", "").strip(),
             "project": md.get("project"),
             "page": md.get("page"),
-            "description": desc,
-            "score": round(match["score"], 3)
+            "image_url": md.get("image_url", ""),
+            "score": match["score"]
         })
-    return images
+
+    if not candidates:
+        print("RAG: No image candidates passed the score threshold.")
+        return []
+
+    # 2. Cross-Encoder Reranking
+    rerank_pairs = [(query, c["description"]) for c in candidates]
+    rerank_scores = reranker.predict(rerank_pairs)
+    for i, score in enumerate(rerank_scores):
+        candidates[i]["rerank_score"] = float(score)
+
+    candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
+
+    # 3. Deduplication and Diversity (Max 2 images per project)
+    seen_desc = set()
+    project_count = Counter()
+    final_images = []
+
+    for c in candidates:
+        if len(final_images) >= top_k:
+            break
+        
+        if c["description"] in seen_desc:
+            continue
+            
+        if project_count[c["project"]] >= 2 and not is_comparison:
+            continue
+            
+        seen_desc.add(c["description"])
+        project_count[c["project"]] += 1
+
+        filename = os.path.basename(c["image_url"])
+        final_images.append({
+            "url": f"/static/images/{filename}",
+            "project": c["project"],
+            "page": c["page"],
+            "description": c["description"],
+            "score": round(c["rerank_score"], 3)
+        })
+
+    print(f"RAG: Final image results -> {len(final_images)} items")
+    return final_images
 
 # ============================================================
 # GUARDRAIL
@@ -215,7 +264,7 @@ def is_query_relevant(query):
     q = query.lower()
     # Dynamic guardrails: includes words from all project names
     dynamic_keywords = []
-    _, all_projs, _ = get_all_projects_map()
+    mapping, all_projs = get_all_projects_map()
     for proj in all_projs:
         dynamic_keywords.extend(proj.lower().split("_"))
     
@@ -249,7 +298,7 @@ def generate_answer(query, context, images_context, language="English"):
         for i, img in enumerate(images_context)
     ])
 
-    _, all_projs, _ = get_all_projects_map()
+    mapping, all_projs = get_all_projects_map()
     project_list = ", ".join(all_projs)
 
     system_msg = f"""You are a helpful assistant for the Textile Department. 
@@ -290,7 +339,7 @@ def get_standalone_query_and_projects(query, history):
     """Ask LLM to rewrite query AND identify projects involved."""
     history_str = "\n".join([f"{m['role']}: {m['content'][:300]}" for m in history[-4:]])
     
-    _, all_projs, _ = get_all_projects_map()
+    mapping, all_projs = get_all_projects_map()
     
     # We ask for a JSON response to keep it clean
     prompt = f"""You are an expert textile researcher. Analyze the follow-up question in context of history.

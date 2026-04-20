@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-dotenv
+pinecone
+sentence-transformers
+groq
+torch
+pydantic
+python-multipart
+starlette
+pymupdf
+pillow
+langchain-text-splitters

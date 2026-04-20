@@ -154,7 +154,7 @@
     </footer>
 
     <script>
-        const API_URL = "http://localhost:8000";
+        const API_URL = ""; // Relative to the hosted domain
 
         async function sendMessage() {
             const input = document.getElementById('query');
@@ -174,7 +174,7 @@
                 const data = await response.json();
                 addMessage(data.answer, 'bot', data.images);
             } catch (error) {
-                addMessage("Error: Is the backend server running?", 'bot');
+                addMessage("Error communicating with the backend.", 'bot');
             }
         }
 
@@ -191,7 +191,7 @@
                     const item = document.createElement('div');
                     item.className = 'gallery-item';
                     item.innerHTML = `
-                        <img src="${API_URL}${img.url}" onclick="window.open('${API_URL}${img.url}')">
+                        <img src="${img.url}" onclick="window.open('${img.url}')">
                         <div class="caption">${img.description.substring(0, 150)}${img.description.length > 150 ? '...' : ''}</div>
                     `;
                     gallery.appendChild(item);
