@@ -1,3 +1,13 @@
+---
+title: Textile Dept Assistant
+emoji: 👗
+colorFrom: yellow
+colorTo: orange
+sdk: docker
+app_port: 7860
+app_dir: website_chatbot
+pinned: false
+---
 # Indian Textile Art Classifier — Engineer Handover
 
 > Classification of three Indian embroidery styles (Maheshwari, Negammam, Phulkari) using YOLO11. Trained in Python, exported to TFLite float16, deployed in a native Android app with real-time camera inference.

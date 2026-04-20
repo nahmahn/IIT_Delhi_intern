@@ -26,7 +26,8 @@ text_idx = pc.Index("website-text-v3")
 image_idx = pc.Index("website-images-v3")
 
 # Load models - Forcing CPU to avoid local DLL crashes/driver issues
-device = "cuda"
+# Dynamic device selection (CUDA for local, CPU for Hugging Face free tier)
+device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"RAG: Loading Local Embeddings ({device})...")
 text_model = SentenceTransformer('BAAI/bge-base-en-v1.5', device=device)
 
@@ -276,7 +277,8 @@ def is_query_relevant(query):
         "साड़ी", "बुनाई", "कपास", "रेशम", "डिज़ाइन", "परियोजना",
         "बालूचरी", "मसलिन", "नेगमम", "फुलकारी",
         "baluchari", "muslin", "negamam", "phulkari", "maheshwari",
-        "history", "origin", "cluster", "weaver"
+        "history", "origin", "cluster", "weaver",
+        "hello", "hi", "who are you", "who are u", "assistant", "help"
     ]
     
     for kw in set(dynamic_keywords + extra_keywords):
