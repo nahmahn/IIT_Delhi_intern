@@ -18,9 +18,7 @@ YOLO11m_benchmark/
 *.pth
 *.h5
 *.npy
-# Excluding runs directory (YOLO/Tensorboard)
 
-ensemble_results/
 
 # --- SENSITIVE DATA ---
 .env
