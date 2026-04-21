@@ -14,12 +14,12 @@ tflite_models/
 YOLO11m_benchmark/
 
 # --- LARGE ARTIFACTS (Models/Data) ---
-*.pt
+
 *.pth
 *.h5
 *.npy
 # Excluding runs directory (YOLO/Tensorboard)
-runs/
+
 ensemble_results/
 
 # --- SENSITIVE DATA ---
