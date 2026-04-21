@@ -28,11 +28,24 @@ pc = Pinecone(api_key=PINECONE_API_KEY)
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 # Indexes
-TEXT_INDEX_NAME = "website-text-v2"
-IMAGE_INDEX_NAME = "website-images-text"
+TEXT_INDEX_NAME = "website-text-v4"
+IMAGE_INDEX_NAME = "website-images-v4"
 
 text_idx = pc.Index(TEXT_INDEX_NAME)
 image_idx = pc.Index(IMAGE_INDEX_NAME)
+
+# --- CLASSIFICATION LOGIC ---
+DOC_TYPE_RULES = {
+    "project_report": ["baluchari", "muslin", "negamam", "phulkari", "maheshwari"],
+    "dept_info": ["shri", "centre", "department"],
+}
+
+def classify_doc_type(project_name):
+    name_lower = project_name.lower()
+    for doc_type, keywords in DOC_TYPE_RULES.items():
+        if any(kw in name_lower for kw in keywords):
+            return doc_type
+    return "supplementary"
 
 # 2. Setup Embedding Model
 print("Loading BAAI/bge-base-en-v1.5...")
@@ -43,10 +56,16 @@ def get_bge_embedding(text):
     instruction = "represent the document for retrieval: "
     return model.encode(instruction + text).tolist()
 
+import sys
+
 # 3. Target PDF
-PDF_FILENAME = "Carbon footprint of Heritage products.pdf"
+if len(sys.argv) > 1:
+    PDF_FILENAME = sys.argv[1]
+else:
+    PDF_FILENAME = "Carbon footprint of Heritage products.pdf"
 PDF_PATH = os.path.join(BASE_DIR, PDF_FILENAME)
 PROJECT_NAME = PDF_FILENAME.replace(".pdf", "")
+DOC_TYPE = classify_doc_type(PROJECT_NAME)
 # Assigning index 6 to avoid collision with existing 0-5
 PDF_ID_IDX = 6
 
@@ -55,7 +74,7 @@ if not os.path.exists(PDF_PATH):
     exit(1)
 
 # 4. Processing
-print(f"=== Processing: {PROJECT_NAME} ===")
+print(f"=== Processing: {PROJECT_NAME} | Type: {DOC_TYPE} ===")
 doc = fitz.open(PDF_PATH)
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
 
@@ -67,23 +86,18 @@ all_image_data = []
 
 def generate_llama_caption(page_text, page_num, img_idx):
     """Use Llama 3.3 70B to generate a high-quality, data-aware caption."""
-    page_text = page_text[:2500]  # Slightly more context for better chart detection
-    prompt = f"""You are an expert technical researcher analyzing a document about: "{PROJECT_NAME}".
-You are looking at Page {page_num}, which contains an image (Image #{img_idx+1}).
+    prompt = f"""You are describing an image extracted from a document about "{PROJECT_NAME}".
+Based ONLY on the surrounding text below, write a brief, natural caption for what this image likely depicts.
 
-TASK:
-Determine if this image is a DATA CHART (Pie chart, Bar graph, Table) or a TEXTILE PHOTOGRAPH.
-Write a SPECIFIC, technically accurate caption based on the surrounding text.
+RULES:
+1. Keep it under 20 words.
+2. Always mention the specific textile type (e.g., "Negamam saree", "Phulkari embroidery").
+3. ONLY describe it as a chart/graph if the text explicitly says "Figure X:" or "Table X:" with specific data labels right next to this image position.
+4. Otherwise, assume it is a photograph and describe the visual subject.
+5. If unsure, write: "Textile photograph related to {PROJECT_NAME}."
 
-STRICT RULES:
-1. If it's a chart/graph, start with "Pie chart showing..." or "Graph displaying...".
-2. Explicitly mention what the data represents (e.g., "Carbon footprint breakdown," "Emission hotspots").
-3. Include the specific saree or material name mentioned in the data labels or nearby headers.
-4. If it's a photograph, describe the visual scene (e.g., "Artisan weaving Baluchari motif").
-5. Keep it under 25 words. DO NOT use generic phrases like "as seen in the report".
-
-Page text:
-{page_text}
+Page text snippet:
+{page_text[:2500]}
 
 Caption:"""
     try:
@@ -113,7 +127,8 @@ for page_num in range(len(doc)):
                 "metadata": {
                     "project": PROJECT_NAME,
                     "page": page_num + 1,
-                    "text": chunk
+                    "text": chunk,
+                    "doc_type": DOC_TYPE
                 }
             })
     
@@ -143,7 +158,8 @@ for page_num in range(len(doc)):
                 "project": PROJECT_NAME,
                 "page": page_num + 1,
                 "image_url": f"/static/images/{img_filename}",
-                "description": caption
+                "description": caption,
+                "doc_type": DOC_TYPE
             }
         })
         time.sleep(0.5) # Rate limiting for Groq

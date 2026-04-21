@@ -29,8 +29,8 @@ print(f"Ingest: Loading Embedding Model (BGE-base) on {DEVICE}...")
 text_model = SentenceTransformer('BAAI/bge-base-en-v1.5', device=DEVICE)
 
 # --- INDEX CREATION LOGIC ---
-TEXT_INDEX_NAME = "website-text-v3"
-IMAGE_INDEX_NAME = "website-images-v3"
+TEXT_INDEX_NAME = "website-text-v4"
+IMAGE_INDEX_NAME = "website-images-v4"
 
 def ensure_index(name, dim):
     if name not in [idx.name for idx in pc.list_indexes()]:
@@ -64,19 +64,15 @@ def classify_doc_type(project_name):
 # --- SMART CAPTIONING (Chart detection) ---
 def generate_smart_caption(page_text, page_num, img_idx, project_name):
     """Use Llama-70B to generate a data-aware caption."""
-    prompt = f"""You are an expert technical researcher analyzing a document about: "{project_name}".
-You are looking at Page {page_num}, which contains an image (Image #{img_idx+1}).
+    prompt = f"""You are describing an image extracted from a document about "{project_name}".
+Based ONLY on the surrounding text below, write a brief, natural caption for what this image likely depicts.
 
-TASK:
-Determine if this image is a DATA CHART (Pie chart, Bar graph, Table) or a TEXTILE PHOTOGRAPH/MAP.
-Write a SPECIFIC, technically accurate caption based on the surrounding text.
-
-STRICT RULES:
-1. If it's a chart/graph, start with "Pie chart showing..." or "Graph displaying...".
-2. Explicitly mention what the data represents (e.g., "Carbon footprint breakdown," "Sustainability metrics").
-3. Include the specific saree or material name mentioned in the data labels or nearby headers.
-4. If it's a photograph, describe the visual scene (e.g., "Artisan weaving Baluchari motif").
-5. Keep it under 25 words. DO NOT be generic.
+RULES:
+1. Keep it under 20 words.
+2. Always mention the specific textile type (e.g., "Negamam saree", "Phulkari embroidery").
+3. ONLY describe it as a chart/graph or a piechart if it looks like one or also if the text explicitly says "Figure X:" or "Table X:" with specific data labels right next to this image position.
+4. Otherwise, assume it is a photograph and describe the visual subject.
+5. If unsure, write: "Textile photograph related to {project_name}."
 
 Page text snippet:
 {page_text[:2500]}

@@ -3,11 +3,10 @@ from pinecone import Pinecone
 from dotenv import load_dotenv
 
 # Load environment
-load_dotenv()
+load_dotenv(os.path.join("website_chatbot", ".env"))
+pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
 
-PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
-pc = Pinecone(api_key=PINECONE_API_KEY)
-idx = pc.Index("website-images-text")
+idx = pc.Index("website-images-v4")
 
 print("--- Pinecone Image Audit ---")
 stats = idx.describe_index_stats()

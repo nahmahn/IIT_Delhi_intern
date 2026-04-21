@@ -20,10 +20,10 @@ PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
-# website-text-v3: Professional metadata-driven index
-text_idx = pc.Index("website-text-v3")
-# website-images-v3: Professional metadata-driven image index
-image_idx = pc.Index("website-images-v3")
+# website-text-v4: Professional metadata-driven index
+text_idx = pc.Index("website-text-v4")
+# website-images-v4: Professional metadata-driven image index
+image_idx = pc.Index("website-images-v4")
 
 # Load models - Forcing CPU to avoid local DLL crashes/driver issues
 # Dynamic device selection (CUDA for local, CPU for Hugging Face free tier)
@@ -62,27 +62,31 @@ DOC_TYPE_RULES = {
 
 # --- DYNAMIC PROJECT DISCOVERY ---
 @functools.lru_cache(maxsize=1)
-def get_all_projects_map():
-    """Create a map of keywords to actual project filenames for query rewriting."""
-    projs = [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
-    mapping = {}
-    
-    for p in projs:
-        name_lower = p.lower()
-        # Map first word/keyword to full local name
-        keyword = p.split("_")[0].split(" ")[0].lower()
-        mapping[keyword] = p
-            
-    return mapping, projs 
+def get_all_projects():
+    """Fetch unique project names directly from Pinecone — no filesystem dependency."""
+    try:
+        # Query with a dummy vector to get metadata from recent records
+        dummy_vec = [0.0] * 768
+        results = text_idx.query(vector=dummy_vec, top_k=100, include_metadata=True)
+        projects = list({m["metadata"]["project"] for m in results["matches"]})
+        if not projects:
+            # Fallback to filesystem if index is empty/initializing
+            return [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
+        return projects
+    except Exception as e:
+        print(f"RAG: Discovery error: {e}")
+        return [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
 
 def get_projects_from_text(text):
-    """Fallback: detect project names by simple keyword matching."""
-    mapping, _ = get_all_projects_map()
+    """Detect project names by keyword matching against Pinecone-discovered list."""
+    all_projects = get_all_projects()
     detected = []
     text_lower = text.lower()
-    for kw, full_name in mapping.items():
-        if kw in text_lower:
-            detected.append(full_name)
+    for p in all_projects:
+        # Check if project name or its first word is in query
+        keyword = p.split("_")[0].split(" ")[0].lower()
+        if keyword in text_lower or p.lower() in text_lower:
+            detected.append(p)
     return list(set(detected))
 
 
@@ -95,16 +99,21 @@ def retrieve_text(query, query_vec, detected_projects=None, top_k=3):
     final_projects = list(set((detected_projects or []) + extra_detected))
     
     # Text Retrieval Filter Strategy:
-    # 1. Detected Projects -> Focus on those + Dept Info + Supplementary
+    # 1. Detected Projects -> Focus on those + Dept Info + Supplementary (conditional)
     # 2. No Projects -> Global search (No filter)
     if final_projects:
-        filter_dict = {
-            "$or": [
-                {"project": {"$in": final_projects}},
-                {"doc_type": {"$in": ["dept_info", "supplementary"]}}
-            ]
-        }
-        print(f"RAG: Text filter active (Project + Dept + Supp) -> {final_projects}")
+        or_conditions = [
+            {"project": {"$in": final_projects}},
+            {"doc_type": {"$eq": "dept_info"}}
+        ]
+        
+        # Include supplementary only for cross-cutting queries (mentor feedback rule)
+        supp_keywords = ["carbon", "footprint", "emission", "environment", "sustainability", "heritage products", "location"]
+        if any(kw in query.lower() for kw in supp_keywords):
+            or_conditions.append({"doc_type": {"$eq": "supplementary"}})
+            
+        filter_dict = {"$or": or_conditions}
+        print(f"RAG: Text filter active -> {final_projects} (+ Dept/Supp if relevant)")
     else:
         filter_dict = None
         print("RAG: Global text search active (No filters).")
@@ -149,10 +158,22 @@ def retrieve_text(query, query_vec, detected_projects=None, top_k=3):
     contexts = []
     sources = []
     for item in top_candidates:
-        contexts.append(f"[{item['project']}, Page {item['page']}]: {item['text']}")
+        clean_name = get_clean_project_name(item['project'])
+        contexts.append(f"[Source: {clean_name}, Page {item['page']}]: {item['text']}")
         sources.append({"project": item["project"], "page": item["page"]})
     
     return "\n\n".join(contexts), sources
+
+def get_clean_project_name(raw_name):
+    """Strip professor names, dates, codes from project names for cleaner answers."""
+    parts = raw_name.split("_")
+    clean_parts = []
+    for p in parts:
+        # Stop at technical suffixes
+        if any(p.startswith(prefix) for prefix in ["Dr.", "Prof.", "DST", "Data"]):
+            break
+        clean_parts.append(p)
+    return " ".join(clean_parts) if clean_parts else parts[0]
 
 def retrieve_images(query, query_vec, top_k=6, project_filters=None, is_comparison=False):
     """Retrieve images using metadata-driven doc_type filtering."""
@@ -162,16 +183,11 @@ def retrieve_images(query, query_vec, top_k=6, project_filters=None, is_comparis
     SCORE_THRESHOLD = 0.55  # hard filter for low relevance
 
     # Image Retrieval Filter Strategy (Mentor-aligned):
-    # 1. Projects Detected -> Only fetch those specific projects + dept_info
+    # 1. Projects Detected -> Only fetch those specific projects (strict, no leakage)
     # 2. No Projects -> Fetch project_reports + dept_info (Exclude supplementary/charts)
     if final_projects:
-        filter_dict = {
-            "$or": [
-                {"project": {"$in": final_projects}},
-                {"doc_type": {"$eq": "dept_info"}}
-            ]
-        }
-        print(f"RAG: Image filter active (Project + Dept) -> {final_projects}")
+        filter_dict = {"project": {"$in": final_projects}}
+        print(f"RAG: Image filter strict (Project only) -> {final_projects}")
     else:
         filter_dict = {
             "doc_type": {"$in": ["project_report", "dept_info"]}
@@ -245,12 +261,14 @@ def retrieve_images(query, query_vec, top_k=6, project_filters=None, is_comparis
         seen_desc.add(c["description"])
         project_count[c["project"]] += 1
 
+        clean_proj = get_clean_project_name(c["project"])
         filename = os.path.basename(c["image_url"])
         final_images.append({
             "url": f"/static/images/{filename}",
             "project": c["project"],
             "page": c["page"],
             "description": c["description"],
+            "clean_project": clean_proj,
             "score": round(c["rerank_score"], 3)
         })
 
@@ -265,7 +283,7 @@ def is_query_relevant(query):
     q = query.lower()
     # Dynamic guardrails: includes words from all project names
     dynamic_keywords = []
-    mapping, all_projs = get_all_projects_map()
+    all_projs = get_all_projects()
     for proj in all_projs:
         dynamic_keywords.extend(proj.lower().split("_"))
     
@@ -292,25 +310,28 @@ def is_query_relevant(query):
 # ============================================================
 chat_history = []
 
-def generate_answer(query, context, images_context, language="English"):
+def generate_answer(query, context, images_context, language="English", is_comparison=False):
     lang_instruction = f"Respond in {language} language." if language.lower() not in ["english", "en"] else ""
 
     images_info = "\n".join([
-        f"- Image {i+1}: {img['description'][:150]} (from {img['project']}, Page {img['page']})" 
+        f"- Image {i+1}: {img['description'][:150]} (Source: {img['clean_project']})" 
         for i, img in enumerate(images_context)
     ])
 
-    mapping, all_projs = get_all_projects_map()
+    all_projs = get_all_projects()
     project_list = ", ".join(all_projs)
 
-    system_msg = f"""You are a helpful assistant for the Textile Department. 
-    You ONLY answer questions about these projects: {project_list}.
+    system_msg = f"""You are a concise research assistant for the Textile Department.
     
     STRICT RULES:
     1. Answer ONLY using the context provided below.
-    2. If the context does not contain the answer, say "Main is baare mein jaankari nahi de sakta, mera focus sirf Textile Department ke project reports par hai." (I cannot provide information on that, my focus is only on Textile Department project reports.)
-    3. If the user asks who you are, say "I am a research assistant for the Textile Department."
-    4. DO NOT answer general questions (math, recipes, AI models, etc.).
+    2. Answer the SPECIFIC question asked. Do NOT provide a general overview.
+    3. Keep answers to 3-4 sentences maximum, unless the user explicitly asks for detail.
+    4. Use bullet points for lists.
+    5. NEVER mention document filenames, report titles, professor names, or page numbers (like "Phulkari Designs_Dr. Priyanka..."). Use only clean names like "Phulkari".
+    6. If the context does not contain the answer, say "I don't have specific information about this in the project reports."
+    7. If the user asks who you are, say "I am a research assistant for the Textile Department."
+    8. DO NOT answer general questions (math, recipes, AI models, etc.).
 
     Context:
     {context}
@@ -325,10 +346,10 @@ def generate_answer(query, context, images_context, language="English"):
     messages.append({"role": "user", "content": query})
 
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=messages,
         temperature=0.3,
-        max_tokens=1024,
+        max_tokens=768 if is_comparison else 512,
     )
     answer = response.choices[0].message.content
     
@@ -341,7 +362,7 @@ def get_standalone_query_and_projects(query, history):
     """Ask LLM to rewrite query AND identify projects involved."""
     history_str = "\n".join([f"{m['role']}: {m['content'][:300]}" for m in history[-4:]])
     
-    mapping, all_projs = get_all_projects_map()
+    all_projs = get_all_projects()
     
     # We ask for a JSON response to keep it clean
     prompt = f"""You are an expert textile researcher. Analyze the follow-up question in context of history.
@@ -388,14 +409,40 @@ def get_standalone_query_and_projects(query, history):
             
     # Final normalization
     final_projects = []
+    
+    # 1. Normalize LLM output
     for lp in llm_projects:
         for ap in all_projs:
-            if lp in ap.lower():
+            # Multi-directional substring match
+            if lp in ap.lower() or ap.lower() in lp:
                 final_projects.append(ap)
                 
+    # 2. Safety Fallback: Keyword-based scan if LLM missed it or returned nothing
+    if not final_projects:
+        q_lower = query.lower()
+        for ap in all_projs:
+            # Extract first word as core identifier (e.g., "Negamam", "Baluchari")
+            # We also handle underscores and spaces
+            core_id = ap.replace("_", " ").split(" ")[0].lower()
+            if core_id in q_lower:
+                final_projects.append(ap)
+                
+    final_projects = list(set(final_projects))
+    
+    # Final check: If it was supposed to be a comparison but we only found one project, 
+    # re-verify if other projects are present in the query text.
+    if is_comparison or len(final_projects) == 0:
+        q_lower = query.lower()
+        for ap in all_projs:
+            core_id = ap.replace("_", " ").split(" ")[0].lower()
+            if core_id in q_lower and ap not in final_projects:
+                final_projects.append(ap)
+                
+    final_projects = list(set(final_projects))
     print(f"RAG: LLM Rewritten -> {rewritten}")
-    print(f"RAG: LLM Projects  -> {list(set(final_projects))} (Comparison: {is_comparison})")
-    return rewritten, list(set(final_projects)), is_comparison
+    print(f"RAG: Detected Projects -> {final_projects} (Comparison: {is_comparison})")
+    
+    return rewritten, final_projects, is_comparison
 
 # ============================================================
 # MAIN QUERY HANDLER
@@ -437,7 +484,7 @@ def process_query(query, language="English"):
     
     # 4. Generate answer with memory
     t0 = time.time()
-    answer = generate_answer(query, context, images, language)
+    answer = generate_answer(query, context, images, language, is_comparison=is_comp)
     print(f"  >> Step 4 (LLM answer):   {time.time()-t0:.2f}s")
     
     print(f"  == TOTAL: {time.time()-t_total:.2f}s")
