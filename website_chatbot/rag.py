@@ -6,7 +6,7 @@ import concurrent.futures
 from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from dotenv import load_dotenv
-from groq import Groq
+import ollama
 import torch
 
 # Load environment
@@ -34,8 +34,8 @@ text_model = SentenceTransformer('BAAI/bge-base-en-v1.5', device=device)
 print(f"RAG: Loading Local Reranker ({device})...")
 reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device=device)
 
-print("RAG: Using Groq Llama 70B Versatile...")
-groq_client = Groq(api_key=GROQ_API_KEY)
+print("RAG: Using Local Ollama (llama3.1:8b)...")
+# groq_client = Groq(api_key=GROQ_API_KEY)
 
 # --- EMBEDDING CACHE ---
 _embedding_cache = {}
@@ -345,13 +345,15 @@ def generate_answer(query, context, images_context, language="English", is_compa
     messages.extend(chat_history[-6:])
     messages.append({"role": "user", "content": query})
 
-    response = groq_client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+    response = ollama.chat(
+        model="llama3.1:8b",
         messages=messages,
-        temperature=0.3,
-        max_tokens=768 if is_comparison else 512,
+        options={
+            "temperature": 0.3,
+            "num_predict": 1024,
+        }
     )
-    answer = response.choices[0].message.content
+    answer = response['message']['content']
     
     chat_history.append({"role": "user", "content": query})
     chat_history.append({"role": "assistant", "content": answer})
@@ -364,36 +366,43 @@ def get_standalone_query_and_projects(query, history):
     
     all_projs = get_all_projects()
     
-    # We ask for a JSON response to keep it clean
-    prompt = f"""You are an expert textile researcher. Analyze the follow-up question in context of history.
-    
-    Available Project Files:
-    {", ".join(all_projs)}
-    
-    Recent Chat History:
-    {history_str}
-    
-    Current Follow-up: {query}
-    
-    TASK:
-    1. Rephrase as a standalone search query (Concepts ONLY, remove professor names/dates).
-    2. Identify ONLY the project names from the list above that are DIRECTLY RELEVANT.
-       - IMPORTANT: You MUST return exact string matches to the items in "Available Project Files" (e.g. including the professor and date suffixes if they exist in the list). Do not truncate the names.
-    3. Determine if this is a comparison query between multiple projects.
-    
-    Response format:
-    Query: [Semantic query]
-    Projects: [Comma separated list of EXACT project names]
-    IsComparison: [True/False]"""
+    system_prompt = f"""You are an expert textile researcher. Your task is to rewrite follow-up questions into standalone search queries and identify RELEVANT projects.
 
-    # Use fast 8B model for lightweight rewriting (70B is overkill here)
-    response = groq_client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=150,
+AVAILABLE PROJECT FILES:
+{", ".join(all_projs)}
+
+TASK:
+1. Rephrase the "CURRENT FOLLOW-UP" into a standalone search query (Query).
+   - RECENCY RULE: If the user uses pronouns like "it", "this", or "they", they ALWAYS refer to the MOST RECENT textile or project mentioned in the history.
+   - RELEVANCY RULE: If the "CURRENT FOLLOW-UP" is completely unrelated to textiles, research, or the department (e.g., food, recipes, sports, general math), DO NOT rewrite it to a textile query. Instead, set Query to "NOT_RELEVANT".
+2. Identify projects from the list above that are DIRECTLY RELEVANT to the "CURRENT FOLLOW-UP" (Projects).
+   - IMPORTANT: If the current query mentions a NEW textile, prioritize it. If it uses pronouns, use the most recent textile from history.
+
+EXAMPLES:
+- History: "About Muslin" -> Follow-up: "how is it made?" -> Query: "Manufacturing process of Muslin", Projects: [Muslin...], IsComparison: False
+- History: "About Phulkari" -> Follow-up: "what about Baluchari?" -> Query: "Information about Baluchari", Projects: [Baluchari...], IsComparison: False
+- History: "About Baluchari" -> Follow-up: "give me a pizza recipe" -> Query: "NOT_RELEVANT", Projects: [], IsComparison: False
+
+RESPONSE FORMAT:
+Query: [Semantic query]
+Projects: [Comma separated list of EXACT project names]
+IsComparison: [True/False]"""
+
+    user_content = f"RECENT CHAT HISTORY:\n{history_str}\n\nCURRENT FOLLOW-UP: {query}"
+
+    # Use local model for rewriting
+    response = ollama.chat(
+        model="llama3.1:8b",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        options={   
+            "temperature": 0,
+            "num_predict": 150,
+        }
     )
-    res = response.choices[0].message.content
+    res = response['message']['content']
     
     # Parse lines
     rewritten = query
@@ -417,20 +426,39 @@ def get_standalone_query_and_projects(query, history):
             if lp in ap.lower() or ap.lower() in lp:
                 final_projects.append(ap)
                 
-    # 2. Safety Fallback: Keyword-based scan if LLM missed it or returned nothing
-    if not final_projects:
-        q_lower = query.lower()
-        for ap in all_projs:
-            # Extract first word as core identifier (e.g., "Negamam", "Baluchari")
-            # We also handle underscores and spaces
-            core_id = ap.replace("_", " ").split(" ")[0].lower()
-            if core_id in q_lower:
-                final_projects.append(ap)
+    # 2. Safety Fallback: Keyword-based scan (Always run for current query to prevent LLM missing obvious keywords)
+    q_lower = query.lower()
+    for ap in all_projs:
+        # Extract first word as core identifier (e.g., "Negamam", "Baluchari")
+        core_id = ap.replace("_", " ").split(" ")[0].lower()
+        if core_id in q_lower and ap not in final_projects:
+            final_projects.append(ap)
                 
     final_projects = list(set(final_projects))
     
-    # Final check: If it was supposed to be a comparison but we only found one project, 
-    # re-verify if other projects are present in the query text.
+    # 3. Hard Pruning: If a new textile is mentioned, purge unrelated projects from history
+    if not is_comparison:
+        core_textiles = ["baluchari", "muslin", "negamam", "phulkari", "maheshwari"]
+        mentioned_textiles = [t for t in core_textiles if t in query.lower()]
+        
+        if mentioned_textiles:
+            # Keep only projects that match the mentioned textiles
+            pruned_projects = []
+            for p in final_projects:
+                p_lower = p.lower()
+                # If this project belongs to one of the core textiles
+                project_textile = next((t for t in core_textiles if t in p_lower), None)
+                
+                if project_textile:
+                    # If it's the one we mentioned, keep it. If it's a DIFFERENT core textile, drop it.
+                    if project_textile in mentioned_textiles:
+                        pruned_projects.append(p)
+                else:
+                    # Keep non-textile projects (like "Carbon footprint...")
+                    pruned_projects.append(p)
+            final_projects = pruned_projects
+
+    # Final check: If it was supposed to be a comparison but we only found one project...
     if is_comparison or len(final_projects) == 0:
         q_lower = query.lower()
         for ap in all_projs:
@@ -456,8 +484,8 @@ def process_query(query, language="English"):
     standalone_query, detected_projects, is_comp = get_standalone_query_and_projects(query, chat_history)
     print(f"  >> Step 1 (LLM rewrite):  {time.time()-t0:.2f}s")
 
-    # 0. Quick Guardrail (Now checking the rewritten standalone query!)
-    if not is_query_relevant(standalone_query):
+    # 0. Quick Guardrail
+    if standalone_query == "NOT_RELEVANT" or not is_query_relevant(standalone_query):
         print("  >> Guardrail blocked:", standalone_query)
         return {
             "answer": "I'm sorry, but I can only assist with questions related to the Textile Department projects (Baluchari, Muslin, Negamam, etc.).",
