@@ -4,10 +4,9 @@ python-dotenv
 pinecone
 sentence-transformers
 groq
-torch
 pydantic
 python-multipart
 starlette
 pymupdf
-pillow
 langchain-text-splitters
+torch>=2.4.0
