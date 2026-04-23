@@ -17,7 +17,6 @@ else:
     load_dotenv(os.path.join(BASE_DIR, "..", "ask_textile", ".env"))
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 # website-text-v4: Professional metadata-driven index
@@ -35,7 +34,6 @@ print(f"RAG: Loading Local Reranker ({device})...")
 reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device=device)
 
 print("RAG: Using Local Ollama (llama3.1:8b)...")
-# groq_client = Groq(api_key=GROQ_API_KEY)
 
 # --- EMBEDDING CACHE ---
 _embedding_cache = {}
