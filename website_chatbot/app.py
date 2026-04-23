@@ -27,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = os.path.dirname(__file__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "textile-heritage")
 
@@ -54,11 +54,14 @@ resnet_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225]),
 ])
 
-print("[API] Loading ResNet50 model (Eager, FP16)...")
+print(f"[API] Loading ResNet50 model (Device: {DEVICE})...")
 resnet_model = models.resnet50(weights=None)
 resnet_model.fc = torch.nn.Linear(resnet_model.fc.in_features, NUM_CLASSES)
 resnet_model.load_state_dict(torch.load(RESNET_CKPT, map_location=DEVICE, weights_only=True))
-resnet_model = resnet_model.to(DEVICE).half().eval()
+resnet_model = resnet_model.to(DEVICE)
+if DEVICE.type == 'cuda':
+    resnet_model = resnet_model.half()
+resnet_model.eval()
 
 print("[API] Loading YOLO11m model (Eager, FP16)...")
 yolo_model = YOLO(YOLO_CKPT)
@@ -84,19 +87,24 @@ async def identify_design(file: UploadFile = File(...)):
         contents = await file.read()
         img = Image.open(io.BytesIO(contents)).convert("RGB")
         
-        # ResNet prediction (FP16)
-        tensor = resnet_transform(img).unsqueeze(0).to(DEVICE).half()
+        # Ensure inputs are correct type for models
+        if DEVICE.type == 'cuda':
+            tensor = resnet_transform(img).unsqueeze(0).to(DEVICE).half()
+        else:
+            tensor = resnet_transform(img).unsqueeze(0).to(DEVICE)
+
         with torch.no_grad():
             logits = resnet_model(tensor)
             resnet_probs = F.softmax(logits, dim=1).cpu().numpy()[0]
             
-        # YOLO prediction (FP16)
-        results = yolo_model(img, half=True, verbose=False)[0]
+        # YOLO prediction
+        # YOLO handles half precision internally if requested
+        results = yolo_model(img, half=(DEVICE.type == 'cuda'), verbose=False)[0]
         yolo_probs = results.probs.data.cpu().numpy()
         
-        # Weighted Ensemble
-        w_resnet = 0.15
-        w_yolo = 0.85
+        # Weighted Ensemble (Aligned with research findings)
+        w_resnet = 0.45
+        w_yolo = 0.55
         combined_probs = w_resnet * resnet_probs + w_yolo * yolo_probs
         
         pred_class_idx = int(np.argmax(combined_probs))

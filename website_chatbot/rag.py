@@ -65,14 +65,13 @@ DOC_TYPE_RULES = {
 def get_all_projects():
     """Fetch unique project names directly from Pinecone — no filesystem dependency."""
     try:
-        # Query with a dummy vector to get metadata from recent records
+        # Deep discovery scan (Top 1000) to ensure we find all unique project metadata
         dummy_vec = [0.0] * 768
-        results = text_idx.query(vector=dummy_vec, top_k=100, include_metadata=True)
-        projects = list({m["metadata"]["project"] for m in results["matches"]})
-        if not projects:
-            # Fallback to filesystem if index is empty/initializing
-            return [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
-        return projects
+        results = text_idx.query(vector=dummy_vec, top_k=1000, include_metadata=True)
+        all_detected = list({m["metadata"]["project"] for m in results["matches"]})
+        
+        print(f"RAG: Discovered {len(all_detected)} projects from Pinecone index.")
+        return all_detected
     except Exception as e:
         print(f"RAG: Discovery error: {e}")
         return [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
