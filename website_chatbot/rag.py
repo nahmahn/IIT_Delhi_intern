@@ -537,3 +537,4 @@ def process_query(query, language="English"):
         "images": images,
         "sources": sources
     }
+    
