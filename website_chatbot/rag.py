@@ -17,7 +17,7 @@ else:
     load_dotenv(os.path.join(BASE_DIR, "..", "ask_textile", ".env"))
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+# GROQ_API_KEY no longer needed for Ollama
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 # website-text-v4: Professional metadata-driven index
@@ -34,8 +34,7 @@ text_model = SentenceTransformer('BAAI/bge-base-en-v1.5', device=device)
 print(f"RAG: Loading Local Reranker ({device})...")
 reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device=device)
 
-print("RAG: Using Local Ollama (llama3.1:8b)...")
-# groq_client = Groq(api_key=GROQ_API_KEY)
+print("RAG: Using Ollama (llama3.1:8b)...")
 
 # --- EMBEDDING CACHE ---
 _embedding_cache = {}
@@ -54,39 +53,45 @@ def cached_embed(query):
         del _embedding_cache[oldest]
     return vec
 
-# --- METADATA CLASSIFICATION RULES (Aligned with Ingest) ---
-DOC_TYPE_RULES = {
-    "project_report": ["baluchari", "muslin", "negamam", "phulkari", "maheshwari"],
-    "dept_info": ["shri", "centre", "department"],
-}
-
 # --- DYNAMIC PROJECT DISCOVERY ---
 @functools.lru_cache(maxsize=1)
 def get_all_projects():
     """Fetch unique project names directly from Pinecone — no filesystem dependency."""
     try:
-        # Deep discovery scan (Top 1000) to ensure we find all unique project metadata
         dummy_vec = [0.0] * 768
         results = text_idx.query(vector=dummy_vec, top_k=1000, include_metadata=True)
         all_detected = list({m["metadata"]["project"] for m in results["matches"]})
         
         print(f"RAG: Discovered {len(all_detected)} projects from Pinecone index.")
-        return all_detected
+        return sorted(all_detected)
     except Exception as e:
         print(f"RAG: Discovery error: {e}")
         return [f.replace(".pdf", "") for f in os.listdir(BASE_DIR) if f.endswith(".pdf")]
 
+@functools.lru_cache(maxsize=1)
+def get_entity_names():
+    """
+    Dynamically extract textile entity names from project titles.
+    E.g. from 'Baluchari Saree_Prof...' -> 'baluchari'
+         from 'Phulkari Designs_Dr...' -> 'phulkari'
+    General files like 'Data for AI chatbot' won't produce an entity.
+    This is cached so it only runs once.
+    """
+    entities = set()
+    for p in get_all_projects():
+        first_word = p.replace("_", " ").split(" ")[0].lower()
+        # Only treat it as an entity if the project also contains
+        # typical report indicators (professor names, DST, etc.)
+        p_lower = p.lower()
+        if any(indicator in p_lower for indicator in ["dr.", "prof.", "dst", "designs"]):
+            if len(first_word) > 3:
+                entities.add(first_word)
+    print(f"RAG: Detected entities from index -> {entities}")
+    return entities
+
 def get_projects_from_text(text):
-    """Detect project names by keyword matching against Pinecone-discovered list."""
-    all_projects = get_all_projects()
-    detected = []
-    text_lower = text.lower()
-    for p in all_projects:
-        # Check if project name or its first word is in query
-        keyword = p.split("_")[0].split(" ")[0].lower()
-        if keyword in text_lower or p.lower() in text_lower:
-            detected.append(p)
-    return list(set(detected))
+    """LLM handles project selection. This is a no-op fallback."""
+    return []
 
 
 # ============================================================
@@ -152,7 +157,12 @@ def retrieve_text(query, query_vec, detected_projects=None, top_k=3):
 
     # Sort by rerank score (Higher is better)
     candidates.sort(key=lambda x: x['rerank_score'], reverse=True)
-    top_candidates = candidates[:top_k]
+    
+    # Filter by threshold to ensure context is actually relevant
+    TEXT_THRESHOLD = -3.0
+    final_candidates = [c for c in candidates if c['rerank_score'] > TEXT_THRESHOLD]
+    
+    top_candidates = final_candidates[:top_k]
     
     contexts = []
     sources = []
@@ -247,10 +257,34 @@ def retrieve_images(query, query_vec, top_k=6, project_filters=None, is_comparis
     project_count = Counter()
     final_images = []
 
+    RERANK_THRESHOLD = -2.0  # High precision gatekeeper
+    
+    # --- ENTITY-AWARE FILTER ---
+    # Dynamically identify which textile entities are in the query
+    # and which are NOT, so we can reject images that mention a wrong entity.
+    all_entities = get_entity_names()
+    query_lower = query.lower()
+    queried_entities = {e for e in all_entities if e in query_lower}
+    other_entities = all_entities - queried_entities  # entities NOT in the query
+
     for c in candidates:
         if len(final_images) >= top_k:
             break
         
+        # STRIKE 1: Low relevance
+        if c["rerank_score"] < RERANK_THRESHOLD:
+            continue
+
+        # STRIKE 2: Entity mismatch — if the description mentions a
+        # DIFFERENT textile than what the user asked about, reject it.
+        # This stops "Negamam saree" images leaking into a "Baluchari" query.
+        if queried_entities and not is_comparison:
+            desc_lower = c["description"].lower()
+            mentions_wrong_entity = any(e in desc_lower for e in other_entities)
+            mentions_right_entity = any(e in desc_lower for e in queried_entities)
+            if mentions_wrong_entity and not mentions_right_entity:
+                continue
+
         if c["description"] in seen_desc:
             continue
             
@@ -370,6 +404,8 @@ def get_standalone_query_and_projects(query, history):
 AVAILABLE PROJECT FILES:
 {", ".join(all_projs)}
 
+NOTE: Files like "Data for AI chatbot", "Heritage products and location", and "Carbon footprint..." contain information about ALL textiles (Baluchari, Muslin, etc.). Include them if the user asks for data, images, or general comparisons.
+
 TASK:
 1. Rephrase the "CURRENT FOLLOW-UP" into a standalone search query (Query).
    - RECENCY RULE: If the user uses pronouns like "it", "this", or "they", they ALWAYS refer to the MOST RECENT textile or project mentioned in the history.
@@ -384,21 +420,29 @@ EXAMPLES:
 
 RESPONSE FORMAT:
 Query: [Semantic query]
-Projects: [Comma separated list of EXACT project names]
-IsComparison: [True/False]"""
+RESPONSE FORMAT:
+Query: [Semantic query]     
+Projects: [Comma separated list of EXACT project names from the AVAILABLE list]
+IsComparison: [True/False]
+
+ROUTING LOGIC:
+- You are the Semantic Router. You must decide which projects contain the information needed.
+- "Data for AI chatbot", "Heritage products and location", and "Carbon footprint..." are CROSS-CUTTING files. Include them if the user asks for technical details, images, or broad data.
+- Be precise: do not include "Negamam" projects if the user only asks about "Baluchari", unless it's a comparison.
+"""
 
     user_content = f"RECENT CHAT HISTORY:\n{history_str}\n\nCURRENT FOLLOW-UP: {query}"
 
-    # Use local model for rewriting
+    # Use Ollama for rewriting
     response = ollama.chat(
         model="llama3.1:8b",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content}
         ],
-        options={   
+        options={
             "temperature": 0,
-            "num_predict": 150,
+            "num_predict": 200,
         }
     )
     res = response['message']['content']
@@ -418,54 +462,26 @@ IsComparison: [True/False]"""
     # Final normalization
     final_projects = []
     
-    # 1. Normalize LLM output
+    # 1. Normalize LLM output by matching against the verified 'all_projs' list
+    final_projects = []
     for lp in llm_projects:
         for ap in all_projs:
-            # Multi-directional substring match
-            if lp in ap.lower() or ap.lower() in lp:
+            if lp.lower() in ap.lower() or ap.lower() in lp.lower():
                 final_projects.append(ap)
-                
-    # 2. Safety Fallback: Keyword-based scan (Always run for current query to prevent LLM missing obvious keywords)
-    q_lower = query.lower()
-    for ap in all_projs:
-        # Extract first word as core identifier (e.g., "Negamam", "Baluchari")
-        core_id = ap.replace("_", " ").split(" ")[0].lower()
-        if core_id in q_lower and ap not in final_projects:
-            final_projects.append(ap)
                 
     final_projects = list(set(final_projects))
     
-    # 3. Hard Pruning: If a new textile is mentioned, purge unrelated projects from history
-    if not is_comparison:
-        core_textiles = ["baluchari", "muslin", "negamam", "phulkari", "maheshwari"]
-        mentioned_textiles = [t for t in core_textiles if t in query.lower()]
-        
-        if mentioned_textiles:
-            # Keep only projects that match the mentioned textiles
-            pruned_projects = []
-            for p in final_projects:
-                p_lower = p.lower()
-                # If this project belongs to one of the core textiles
-                project_textile = next((t for t in core_textiles if t in p_lower), None)
-                
-                if project_textile:
-                    # If it's the one we mentioned, keep it. If it's a DIFFERENT core textile, drop it.
-                    if project_textile in mentioned_textiles:
-                        pruned_projects.append(p)
-                else:
-                    # Keep non-textile projects (like "Carbon footprint...")
-                    pruned_projects.append(p)
-            final_projects = pruned_projects
-
-    # Final check: If it was supposed to be a comparison but we only found one project...
-    if is_comparison or len(final_projects) == 0:
+    # 2. Safety Fallback: Use simple keyword matching ONLY if the LLM returned nothing
+    if not final_projects:
         q_lower = query.lower()
         for ap in all_projs:
-            core_id = ap.replace("_", " ").split(" ")[0].lower()
-            if core_id in q_lower and ap not in final_projects:
+            # Match only if a significant word from the project title appears in the query
+            sig_words = [w.lower() for w in ap.replace("_", " ").split(" ") if len(w) > 4]
+            if any(sw in q_lower for sw in sig_words):
                 final_projects.append(ap)
-                
+    
     final_projects = list(set(final_projects))
+                
     print(f"RAG: LLM Rewritten -> {rewritten}")
     print(f"RAG: Detected Projects -> {final_projects} (Comparison: {is_comparison})")
     
