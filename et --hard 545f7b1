@@ -1,0 +1,16 @@
+[33me201265[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m HEAD@{0}: reset: moving to HEAD~1
+[33m545f7b1[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m HEAD@{1}: commit: Final FIx
+[33me201265[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m HEAD@{2}: pull: Fast-forward
+[33mf19df63[m HEAD@{3}: pull: Fast-forward
+[33m5c26df2[m HEAD@{4}: reset: moving to ORIG_HEAD
+[33m1c2c2f5[m HEAD@{5}: pull: Fast-forward
+[33m5c26df2[m HEAD@{6}: commit: Fix
+[33mef197d5[m HEAD@{7}: pull: Fast-forward
+[33m8c4b022[m HEAD@{8}: pull: Fast-forward
+[33me396236[m HEAD@{9}: reset: moving to origin/main
+[33m601fab1[m HEAD@{10}: reset: moving to origin/main
+[33md2ce83b[m HEAD@{11}: pull: Fast-forward
+[33m7c7e2a2[m HEAD@{12}: reset: moving to HEAD
+[33m7c7e2a2[m HEAD@{13}: pull origin main: Fast-forward
+[33m52f1db8[m HEAD@{14}: reset: moving to HEAD
+[33m52f1db8[m HEAD@{15}: clone: from https://github.com/nahmahn/IIT_Delhi_intern.git
