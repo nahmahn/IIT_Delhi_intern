@@ -6,8 +6,8 @@ from tqdm import tqdm
 from sklearn.metrics import accuracy_score, recall_score
 
 def compare_runs():
-    runs_dir = r'c:\Users\namja\Downloads\textile_design\runs\classify'
-    test_dir = r'c:\Users\namja\Downloads\textile_design\data_patched\test'
+    runs_dir = 'runs/classify'
+    test_dir = 'data_patched/test'
     output_file = 'model_comparison_results_patched.csv'
     
     # Identify all models
