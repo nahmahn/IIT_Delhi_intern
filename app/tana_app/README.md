@@ -1,17 +1,27 @@
-# tana_app
+# Tana
 
-A new Flutter project.
+Flutter app for saree recognition and Indian textile heritage exploration. Classification runs fully on-device — no server or internet connection required for inference.
 
-## Getting Started
+## Features
 
-This project is a starting point for a Flutter application.
+- **AI Lens** (`lib/screens/ai_lens_screen.dart`) — point the camera at a saree and classify it as Baluchari, Maheshwari, Negamam, or Phulkari
+- **Onboarding** (`lib/screens/onboarding_screen.dart`) — introduction flow
+- Custom theme in `lib/theme/tana_theme.dart`
 
-A few resources to get you started if this is your first Flutter project:
+## On-device classification
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+`lib/services/classifier_service.dart` runs a weighted two-model ensemble with `tflite_flutter`:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+| Model | Asset | Ensemble weight |
+|---|---|---|
+| YOLO11m (classification) | `assets/models/yolo11m_4class.tflite` | 0.85 |
+| ResNet50 | `assets/models/resnet50_4saree.tflite` | 0.15 |
+
+The weights come from the ensemble verification in `classification/training/ensemble_compare.py`. Models are exported by `classification/training/export_to_tflite.py`.
+
+## Running
+
+```bash
+flutter pub get
+flutter run
+```
