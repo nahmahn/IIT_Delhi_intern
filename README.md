@@ -8,160 +8,127 @@ app_port: 7860
 app_dir: website_chatbot
 pinned: false
 ---
-# Indian Textile Art Classifier — Engineer Handover
 
-> Classification of three Indian embroidery styles (Maheshwari, Negammam, Phulkari) using YOLO11. Trained in Python, exported to TFLite float16, deployed in a native Android app with real-time camera inference.
+# Indian Textile Heritage AI
+
+AI tooling built around traditional Indian textile art forms — **Baluchari, Maheshwari, Negamam, and Phulkari** — developed as part of the DST SHRI textile heritage project (Dept. of Textile & Fibre Engineering, IIT Delhi).
+
+The repository contains four related components:
+
+| Component | What it is | Tech |
+|---|---|---|
+| [training/](training/) | Training, evaluation, ensembling and TFLite export for the 4-class saree classifier | PyTorch, Ultralytics YOLO11, TensorFlow Lite |
+| [website_chatbot/](website_chatbot/) | RAG chatbot for the Textile Dept website, deployed as a Hugging Face Space (Docker) | FastAPI, Pinecone, Groq |
+| [ask_textile/](ask_textile/) | Full-stack "Ask Textile" RAG platform for textile course content | React + Vite frontend, Node/Prisma middleware, Python RAG backend |
+| [tana_app/](tana_app/) | Mobile app with on-device saree classification (bundled TFLite models) and a heritage chatbot | Flutter |
 
 ---
 
-## Project Overview
+## 1. Saree Classifier (`training/`)
 
-Five variants of the YOLO11 image classification architecture were trained and benchmarked on a curated dataset of three Indian textile art forms. YOLO11m was selected as the best model (~92% test accuracy) and exported to TFLite float16 for Android deployment. The Android app runs fully on-device — no server, no internet required.
+Two model families are trained on the same 4-class dataset and combined into an ensemble:
 
----
+- **YOLO11m (classification head)** — fine-tuned from an earlier 3-class benchmark model. Best validation top-1 accuracy **~93.5%** (full report: [runs/classify/YOLO11m_4class4/model_report.md](runs/classify/YOLO11m_4class4/model_report.md)).
+- **ResNet50** — fine-tuned with torchvision; checkpoints in [models/](models/).
 
-## Classes
+### Scripts (run all of them from the repo root)
 
-| Class | Description |
+| Script | Purpose |
 |---|---|
-| Maheshwari | Fine silk-cotton sarees from Maheshwar, Madhya Pradesh — distinctive border patterns and reversal weave |
-| Negammam | Traditional embroidery from Tamil Nadu — bold geometric motifs on cotton fabric |
-| Phulkari | Floral needlework from Punjab — vibrant silk threads on handspun cotton (khaddar) |
+| [patch.py](training/patch.py) | Extract patches from raw images (`data/` → `data_patched/`) |
+| [train_4class.py](training/train_4class.py) | Train YOLO11m on the 4-class patched dataset |
+| [train_resnet_finetune.py](training/train_resnet_finetune.py) | Fine-tune ResNet50 → `models/resnet50_4saree_best.pt` |
+| [evaluate_4class.py](training/evaluate_4class.py) | Evaluate YOLO11m on the test split; dumps misclassifications to `wrong_predictions/` |
+| [evaluate_resnet.py](training/evaluate_resnet.py) | Evaluate ResNet50; writes confusion matrix to `results/` |
+| [compare_models.py](training/compare_models.py) | Benchmark every run under `runs/classify/` on the test split |
+| [ensemble_compare.py](training/ensemble_compare.py) | Compare ResNet50 vs YOLO11m vs their ensemble; plots in `results/` |
+| [export_to_tflite.py](training/export_to_tflite.py) | Export both models to TFLite (float16/float32) for the mobile app |
+| [ensemble_tflite.py](training/ensemble_tflite.py) | Validate the exported TFLite models as an ensemble |
+| [diagnose_tflite.py](training/diagnose_tflite.py) | Debug accuracy drift between the .pt and .tflite versions |
+
+### Key artifacts
+
+- `models/resnet50_4saree_best.pt` — best ResNet50 checkpoint (tracked)
+- `runs/classify/YOLO11m_4class4/weights/best.pt` — deployed YOLO11m checkpoint (tracked, with ONNX/TFLite exports alongside)
+- `results/` — confusion matrices, ensemble comparison and disagreement plots
+- `tana_app/assets/models/` — the TFLite models actually bundled in the mobile app
+
+### Environment
+
+```bash
+conda env create -f environment.yml   # creates the "saree" env
+conda activate saree
+python training/train_4class.py       # always run from the repo root
+```
+
+> **Note:** the dataset folders (`data/`, `data_patched/`, `random_16_02/`, …) are local-only and gitignored — see [Local-only folders](#local-only-folders).
 
 ---
 
-## Where Everything Lives
+## 2. Website Chatbot (`website_chatbot/`)
+
+FastAPI RAG backend + static frontend answering questions about the department's heritage textile documentation (source PDFs are included in the folder). Retrieval uses **Pinecone**, generation uses **Groq**. The repo root's YAML front-matter in this README configures it as a Docker-based **Hugging Face Space** serving on port 7860.
+
+```bash
+cd website_chatbot
+pip install -r requirements.txt
+# .env with PINECONE_API_KEY and GROQ_API_KEY (not committed)
+python ingest_v4_new.py               # one-time: index the PDFs
+uvicorn app:app --host 0.0.0.0 --port 7860
+```
+
+Or via Docker: `docker build -t textile-chatbot website_chatbot && docker run -p 7860:7860 --env-file website_chatbot/.env textile-chatbot`
+
+---
+
+## 3. Ask Textile (`ask_textile/`)
+
+Three-tier RAG application over textile course material (`RAG/textile_courses.json`, with YouTube-augmented variant):
+
+- `frontend/` — React + TypeScript + Vite + Tailwind UI
+- `middleware/` — Node/TypeScript API layer with Prisma (see [SETUP.md](ask_textile/middleware/SETUP.md))
+- `RAG/` — Python retrieval service: Pinecone ingestion ([ingest_pinecone.py](ask_textile/RAG/ingest_pinecone.py)), retriever, LLM prompts, and a **RAGAS** evaluation harness ([ragas_evaluation.py](ask_textile/RAG/ragas_evaluation.py), results in `ragas_results.csv`)
+
+Requires the same `PINECONE_API_KEY` / `GROQ_API_KEY` in `ask_textile/.env` (not committed).
+
+---
+
+## 4. Tana App (`tana_app/`)
+
+Flutter app ("Tana") for saree recognition and textile heritage exploration. The exported TFLite classifiers (`yolo11m_4class.tflite`, `resnet50_4saree.tflite`) are bundled under `tana_app/assets/models/` and run fully on-device.
+
+```bash
+cd tana_app
+flutter pub get
+flutter run
+```
+
+---
+
+## Repository layout
 
 ```
 textile_design/
-│
-├── model.ipynb
-│   Training loop for all 5 YOLO11 variants + benchmark evaluation
-│   + per-class confusion matrix generation on the test split
-│
-├── tflit.ipynb
-│   Export pipeline: best.pt → ONNX (opset 12) → TF SavedModel → TFLite float16
-│   Also contains standalone TFLite inference test against the test split
-│
-├── selected_18_02/               ← dataset root (referenced in both notebooks)
-│   ├── train/
-│   ├── val/
-│   └── test/
-│
-├── YOLO11m_benchmark/            ← training run output for the deployed model
-│   └── weights/
-│       ├── best.pt               ← ✅ BEST TRAINED MODEL (PyTorch weights)
-│       └── best_saved_model/
-│           └── best_float16.tflite   ← ✅ DEPLOYED MODEL (TFLite float16)
-│
-├── results_n_weights/            ← benchmark plots
-│   ├── YOLO11n_test_confusion_matrix.png
-│   ├── YOLO11s_test_confusion_matrix.png
-│   ├── YOLO11m_test_confusion_matrix.png   ← confusion matrix for deployed model
-│   ├── YOLO11l_test_confusion_matrix.png
-│   ├── YOLO11x_test_confusion_matrix.png
-│   └── YOLO11_benchmark_comparison.png     ← bar chart: test accuracy across all 5 models
-│
-└── AndroidApp/                   ← Android Studio project
-    └── ...                       ← TFLite model is bundled as an asset inside here
+├── training/            # classifier training / eval / export scripts (run from repo root)
+├── models/              # tracked ResNet50 checkpoints (+ local TFLite calibration data)
+├── results/             # evaluation & ensemble plots (formerly ensemble_results/)
+├── runs/                # Ultralytics training runs; YOLO11m_4class4 is the deployed one
+├── website_chatbot/     # FastAPI RAG chatbot (HF Space, Docker)
+├── ask_textile/         # full-stack course-content RAG platform
+├── tana_app/            # Flutter mobile app with bundled TFLite models
+├── textile-heritage/    # git submodule reference (separate repo, not vendored here)
+├── environment.yml      # conda env ("saree") for the training scripts
+└── .gitignore
 ```
 
-> **Key paths:**
-> - Best PyTorch weights: `textile_design/YOLO11m_benchmark/weights/best.pt`
-> - Deployed TFLite model: `textile_design/YOLO11m_benchmark/weights/best_saved_model/best_float16.tflite`
+### Local-only folders
+
+These exist on the development machine but are intentionally **not** pushed (datasets and large/derived artifacts, see [.gitignore](.gitignore)):
+
+`data/` (raw dataset, ~7 GB) · `data_patched/` (patched dataset) · `random_16_02/` (raw collection) · `tflite_models/` (export output) · `YOLO11m_benchmark/` (original 3-class benchmark run) · `sareeclassifier_appfile/` · `stitch_designs/` (app UI mockups) · `wrong_predictions/` (misclassified samples) · `brain/` (scratch)
 
 ---
 
-## Workflow Diagram
+## Secrets
 
-![Project workflow](workflow.svg)
-
----
-
-## Training Details
-
-Framework: Ultralytics YOLO11 (`ultralytics` Python package), image classification task (`-cls`).
-
-All five scales were trained independently on the same `selected_18_02` dataset split. Training runs are saved under `textile_design/runs/classify/` — the relevant one is `YOLO11m_benchmark/`.
-
-`model.ipynb` handles training, manual test-set inference, confusion matrix generation, and the benchmark comparison across all five models. The variable `dataset_path` in that notebook is set to `"selected_18_02"` — the dataset must be present at that relative path when running.
-
----
-
-## Benchmark Results
-
-| Model | Test Accuracy | Notes |
-|---|---|---|
-| YOLO11n | ~90% | Smallest; generalises well |
-| YOLO11s | ~90% | Small |
-| **YOLO11m** | **~92%** | **Selected — best accuracy/size tradeoff** |
-| YOLO11l | ~91% | Large; marginal gain over YOLO11m |
-| YOLO11x | ~84% | Overfits on this dataset size |
-
-### Confusion Matrix — YOLO11m (deployed model)
-
-| True ↓ / Predicted → | Maheshwari | Negammam | Phulkari |
-|---|---|---|---|
-| Maheshwari | **28** | 2 | 1 |
-| Negammam | 1 | **27** | 3 |
-| Phulkari | 0 | 0 | **31** |
-
-Phulkari is classified perfectly (31/31). Negammam has minor leakage into Phulkari (3 cases). Maheshwari is strong with minor confusion. Overall solid across all three classes.
-
----
-
-## Export Pipeline
-
-Handled entirely in `tflit.ipynb`. The path to the source weights is hardcoded in that notebook:
-
-```
-pt_model_path = "/home/kniting/textile_design/runs/classify/YOLO11m_benchmark/weights/best.pt"
-```
-
-The pipeline runs:
-
-```
-best.pt
-  → model.export(format="onnx", opset=12)    →  model.onnx
-  → onnx_tf backend                           →  tf_model/  (TF SavedModel)
-  → tf.lite.TFLiteConverter (float16)         →  best_float16.tflite
-```
-
-The notebook also contains a standalone TFLite inference loop that runs `best_float16.tflite` against the test split and regenerates the confusion matrix — useful for validating the exported model without Android.
-
----
-
-## Android App
-
-Built in Android Studio. The model `best_float16.tflite` is bundled as an asset inside the app. The TFLite interpreter runs on-device — no network calls, no backend. Camera frames are preprocessed to 640×640 before inference. The app displays the predicted class label and confidence score in real time.
-
-The Android project is not in this repo due to size — check the original machine at `~/textile_design/AndroidApp/` or equivalent.
-
----
-
-## Key Files at a Glance
-
-| File | Purpose |
-|---|---|
-| `model.ipynb` | Train all 5 YOLO11 variants, evaluate on test set, generate plots |
-| `tflit.ipynb` | Export YOLO11m to TFLite float16, validate TFLite inference |
-| `textile_design/YOLO11m_benchmark/weights/best.pt` | Best trained PyTorch model |
-| `textile_design/YOLO11m_benchmark/weights/best_saved_model/best_float16.tflite` | Deployed TFLite model |
-| `selected_18_02/` | Dataset root (train / val / test) |
-| `results_n_weights/` | Confusion matrices + benchmark bar chart |
-
----
-
-## Dependencies
-
-```
-ultralytics
-scikit-learn
-tensorflow
-onnx
-onnxruntime
-tf2onnx
-onnx-tf
-opencv-python
-matplotlib
-```
+No API keys are committed. Each chatbot component reads `PINECONE_API_KEY` and `GROQ_API_KEY` from its own local `.env` file, which is gitignored.

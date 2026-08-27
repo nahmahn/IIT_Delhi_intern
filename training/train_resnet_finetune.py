@@ -30,8 +30,8 @@ from tqdm import tqdm
 # ============================================================
 DATA_DIR          = "data_patched"
 CHECKPOINT_PATH   = "iew_r50_jitter_flip.pt"           # IndoFashion R50
-OUTPUT_BEST       = "resnet50_4saree_best.pt"           # Best checkpoint
-OUTPUT_FINAL      = "resnet50_4saree_final.pt"          # Final checkpoint
+OUTPUT_BEST       = "models/resnet50_4saree_best.pt"    # Best checkpoint
+OUTPUT_FINAL      = "models/resnet50_4saree_final.pt"   # Final checkpoint
 
 BATCH_SIZE        = 8  # Reduced to avoid OOM at massive 640x640 resolution
 WORKERS           = 0  # Windows requirement (set to 4 on Linux)

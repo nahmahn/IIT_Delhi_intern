@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 # Configuration
 DATA_DIR          = "data/test" # Falls back to data_patched/val if test doesn't exist
-CHECKPOINT_PATH   = "resnet50_4saree_best.pt"
+CHECKPOINT_PATH   = "models/resnet50_4saree_best.pt"
 BATCH_SIZE        = 32
 NUM_CLASSES       = 4
 DEVICE            = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -98,7 +98,7 @@ def main():
     plt.title('ResNet50 Saree Classification - Confusion Matrix', pad=15)
     plt.tight_layout()
     
-    plot_filepath = 'resnet_evaluation_matrix.png'
+    plot_filepath = 'results/resnet_evaluation_matrix.png'
     plt.savefig(plot_filepath, dpi=300)
     print(f"\n[OK] Awesome! Saved a visual confusion matrix to: {plot_filepath}")
 

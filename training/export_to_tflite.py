@@ -19,7 +19,7 @@ from pathlib import Path
 # ══════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════
-RESNET_CKPT   = "resnet50_4saree_best.pt"
+RESNET_CKPT   = "models/resnet50_4saree_best.pt"
 YOLO_CKPT     = "runs/classify/YOLO11m_4class_v4/weights/best.pt"
 CLASS_NAMES   = ["baluchari", "maheshwari", "negammam", "phulkari"]
 NUM_CLASSES   = len(CLASS_NAMES)

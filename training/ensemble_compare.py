@@ -35,14 +35,14 @@ from pathlib import Path
 # ══════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════
-RESNET_CKPT   = "resnet50_4saree_best.pt"
+RESNET_CKPT   = "models/resnet50_4saree_best.pt"
 YOLO_CKPT     = "runs/classify/YOLO11m_4class_v4/weights/best.pt"
 RAW_TEST      = "data/test"
 PATCHED_TEST  = "data_patched/test"
 CLASS_NAMES   = ["baluchari", "maheshwari", "negammam", "phulkari"]
 NUM_CLASSES   = len(CLASS_NAMES)
 DEVICE        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-OUTPUT_DIR    = "ensemble_results"
+OUTPUT_DIR    = "results"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
